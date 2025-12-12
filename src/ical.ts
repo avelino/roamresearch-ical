@@ -2,6 +2,23 @@ import ICAL from "ical.js";
 import { logDebug, logError } from "./logger";
 
 /**
+ * Yields control back to the main thread to prevent UI freezing.
+ * Uses scheduler.yield() when available (modern browsers), otherwise falls back to setTimeout.
+ */
+function yieldToMain(): Promise<void> {
+  const scheduler = (globalThis as unknown as { scheduler?: { yield?: () => Promise<void> } }).scheduler;
+  if (scheduler?.yield) {
+    return scheduler.yield();
+  }
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+/**
+ * Number of operations between yields during parsing.
+ */
+const PARSE_YIELD_BATCH_SIZE = 50;
+
+/**
  * Represents a parsed iCal event.
  */
 export interface ICalEvent {
@@ -90,23 +107,32 @@ function icalTimeToDate(icalTime: ICAL.Time | null): Date | null {
 
 /**
  * Parses raw iCal (.ics) content into events using ical.js.
+ * Yields to main thread periodically to prevent UI freezing with large calendars.
  *
  * @param content Raw .ics file content.
  * @param calendarName Name to use for the calendar.
  */
-export function parseICalContent(content: string, calendarName: string): ICalEvent[] {
+export async function parseICalContent(content: string, calendarName: string): Promise<ICalEvent[]> {
   const events: ICalEvent[] = [];
 
   try {
+    // Yield before heavy parsing operation
+    await yieldToMain();
+
     const jcalData = ICAL.parse(content);
     const comp = new ICAL.Component(jcalData);
+
+    // Yield after parsing jcal data
+    await yieldToMain();
 
     // Get calendar name from X-WR-CALNAME if not provided
     const calName = calendarName || comp.getFirstPropertyValue("x-wr-calname") || "Calendar";
 
     const vevents = comp.getAllSubcomponents("vevent");
 
-    for (const vevent of vevents) {
+    for (let i = 0; i < vevents.length; i++) {
+      const vevent = vevents[i];
+
       try {
         const event = new ICAL.Event(vevent);
 
@@ -125,6 +151,11 @@ export function parseICalContent(content: string, calendarName: string): ICalEve
         }
       } catch (eventError) {
         logDebug("parse_event_error", { error: String(eventError) });
+      }
+
+      // Yield periodically to prevent UI freezing
+      if ((i + 1) % PARSE_YIELD_BATCH_SIZE === 0) {
+        await yieldToMain();
       }
     }
 
@@ -164,6 +195,7 @@ function buildProxiedUrl(proxyUrl: string, targetUrl: string): string {
 
 /**
  * Fetches content through a CORS proxy.
+ * Yields to main thread before and after fetch to prevent UI freezing.
  *
  * @param url Original URL to fetch.
  * @param corsProxy CORS proxy URL prefix.
@@ -173,18 +205,30 @@ async function fetchWithCorsProxy(url: string, corsProxy: string): Promise<strin
 
   logDebug("fetch_with_proxy", { originalUrl: url, proxyUrl });
 
+  // Yield before fetch to ensure UI is responsive
+  await yieldToMain();
+
   const response = await fetch(proxyUrl);
+
+  // Yield after fetch completes
+  await yieldToMain();
 
   if (!response.ok) {
     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
   }
 
-  return response.text();
+  const text = await response.text();
+
+  // Yield after reading response body
+  await yieldToMain();
+
+  return text;
 }
 
 /**
  * Fetches and parses an iCal feed from a URL.
  * Always uses CORS proxy since most calendar providers block cross-origin requests.
+ * Yields to main thread to prevent UI freezing.
  *
  * @param config Calendar configuration with name and URL.
  * @param corsProxy CORS proxy URL prefix.
@@ -197,7 +241,11 @@ export async function fetchICalCalendar(
 
   try {
     const content = await fetchWithCorsProxy(config.url, corsProxy);
-    const events = parseICalContent(content, config.name);
+
+    // Yield before parsing
+    await yieldToMain();
+
+    const events = await parseICalContent(content, config.name);
 
     logDebug("fetch_ical_complete", {
       name: config.name,
@@ -217,7 +265,8 @@ export async function fetchICalCalendar(
 }
 
 /**
- * Fetches multiple iCal calendars in parallel.
+ * Fetches multiple iCal calendars sequentially with yields between each.
+ * Sequential processing prevents UI freezing when parsing multiple large calendars.
  *
  * @param configs Array of calendar configurations.
  * @param corsProxy CORS proxy URL prefix.
@@ -230,18 +279,22 @@ export async function fetchAllCalendars(
     return [];
   }
 
-  const results = await Promise.allSettled(
-    configs.map((config) => fetchICalCalendar(config, corsProxy))
-  );
-
   const calendars: ICalCalendar[] = [];
 
-  for (let i = 0; i < results.length; i++) {
-    const result = results[i];
-    if (result.status === "fulfilled") {
-      calendars.push(result.value);
-    } else {
-      logError(`Calendar fetch failed: ${configs[i].name}`, result.reason);
+  // Process calendars sequentially to prevent UI blocking
+  // Each calendar fetch/parse already yields internally
+  for (let i = 0; i < configs.length; i++) {
+    const config = configs[i];
+
+    try {
+      const calendar = await fetchICalCalendar(config, corsProxy);
+      calendars.push(calendar);
+
+      // Yield between calendars to ensure UI responsiveness
+      await yieldToMain();
+    } catch (error) {
+      logError(`Calendar fetch failed: ${config.name}`, error);
+      // Continue with next calendar on error
     }
   }
 
@@ -355,24 +408,37 @@ export function shouldExcludeEvent(title: string, patterns: RegExp[]): boolean {
 
 /**
  * Filters out events whose titles match any of the exclude patterns.
+ * Yields to main thread periodically to prevent UI freezing.
  *
  * @param events Array of iCal events to filter.
  * @param excludePatterns Array of regex patterns for exclusion.
  * @returns New filtered array (does not mutate input).
  */
-export function filterExcludedEvents(
+export async function filterExcludedEvents(
   events: ICalEvent[],
   excludePatterns: RegExp[]
-): ICalEvent[] {
+): Promise<ICalEvent[]> {
   if (excludePatterns.length === 0) return events;
 
-  return events.filter((event) => {
+  const filtered: ICalEvent[] = [];
+
+  for (let i = 0; i < events.length; i++) {
+    const event = events[i];
     const excluded = shouldExcludeEvent(event.summary, excludePatterns);
+
     if (excluded) {
       logDebug("event_excluded", { title: event.summary, uid: event.uid });
+    } else {
+      filtered.push(event);
     }
-    return !excluded;
-  });
+
+    // Yield periodically to prevent UI freezing
+    if ((i + 1) % PARSE_YIELD_BATCH_SIZE === 0) {
+      await yieldToMain();
+    }
+  }
+
+  return filtered;
 }
 
 /**
@@ -413,18 +479,29 @@ export function isEventInDateRange(event: ICalEvent, config: DateRangeConfig): b
 
 /**
  * Filters events to only include those within the specified date range.
+ * Yields to main thread periodically to prevent UI freezing with large event lists.
  *
  * @param events Array of iCal events to filter.
  * @param config Date range configuration.
  * @returns New filtered array (does not mutate input).
  */
-export function filterEventsByDateRange(
+export async function filterEventsByDateRange(
   events: ICalEvent[],
   config: DateRangeConfig
-): ICalEvent[] {
+): Promise<ICalEvent[]> {
   const beforeCount = events.length;
+  const filtered: ICalEvent[] = [];
 
-  const filtered = events.filter((event) => isEventInDateRange(event, config));
+  for (let i = 0; i < events.length; i++) {
+    if (isEventInDateRange(events[i], config)) {
+      filtered.push(events[i]);
+    }
+
+    // Yield periodically to prevent UI freezing
+    if ((i + 1) % PARSE_YIELD_BATCH_SIZE === 0) {
+      await yieldToMain();
+    }
+  }
 
   const afterCount = filtered.length;
   if (beforeCount !== afterCount) {

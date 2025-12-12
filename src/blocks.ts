@@ -165,8 +165,8 @@ export async function writeBlocks(
   // Collect all events from all calendars
   const allEvents: { event: ICalEvent; calendarName: string }[] = [];
   for (const calendar of calendars) {
-    // Filter out excluded events before processing
-    const filteredEvents = filterExcludedEvents(calendar.events, config.excludePatterns);
+    // Filter out excluded events before processing (async to yield during filtering)
+    const filteredEvents = await filterExcludedEvents(calendar.events, config.excludePatterns);
     for (const event of filteredEvents) {
       allEvents.push({ event, calendarName: calendar.name });
     }

@@ -182,15 +182,19 @@ async function syncCalendars(trigger: "manual" | "auto") {
     const rawCalendars: ICalCalendar[] = await fetchAllCalendars(settings.calendars, settings.corsProxy);
     const totalRawEvents = rawCalendars.reduce((sum, cal) => sum + cal.events.length, 0);
 
-    // Filter events by date range
+    // Filter events by date range (async to yield during filtering)
     const dateRangeConfig = {
       daysPast: settings.syncDaysPast,
       daysFuture: settings.syncDaysFuture,
     };
-    const calendars: ICalCalendar[] = rawCalendars.map(cal => ({
-      ...cal,
-      events: filterEventsByDateRange(cal.events, dateRangeConfig),
-    }));
+    const calendars: ICalCalendar[] = [];
+    for (const cal of rawCalendars) {
+      const filteredEvents = await filterEventsByDateRange(cal.events, dateRangeConfig);
+      calendars.push({
+        ...cal,
+        events: filteredEvents,
+      });
+    }
 
     const totalEvents = calendars.reduce((sum, cal) => sum + cal.events.length, 0);
 

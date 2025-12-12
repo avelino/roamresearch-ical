@@ -129,12 +129,16 @@ The calendar name is sanitized to lowercase, spaces replaced with hyphens, and s
 
 To prevent UI freezing with large calendars:
 
-1. **Date range filtering**: Events are filtered to only include those within the configured sync window (default: 30 days past, 30 days future). This significantly reduces the number of events processed.
-2. **Date-based sorting**: Events are sorted by date (most recent first) before processing. This ensures current/upcoming events are synced first during initial imports.
-3. **Batch processing**: Events are processed in configurable batches (default: 50 events per batch).
-4. **Inter-batch delay**: A configurable delay (default: 500ms) between batches allows the UI to remain responsive.
-5. **Yielding to main thread**: Within each batch, the extension periodically yields control back to the browser to prevent blocking.
-6. **Duplicate detection**: Events with the same UID (recurring events) are deduplicated to prevent creating multiple blocks for the same event.
+1. **Non-blocking fetch**: Calendar fetching yields to main thread before and after network requests, ensuring UI remains responsive during downloads.
+2. **Non-blocking parsing**: iCal parsing yields every 50 events to prevent blocking during heavy parsing operations.
+3. **Sequential calendar processing**: Calendars are fetched and parsed sequentially (not in parallel) with yields between each, preventing CPU spikes.
+4. **Non-blocking filtering**: Date range and exclusion filtering yield periodically to prevent blocking with large event lists.
+5. **Date range filtering**: Events are filtered to only include those within the configured sync window (default: 30 days past, 30 days future). This significantly reduces the number of events processed.
+6. **Date-based sorting**: Events are sorted by date (most recent first) before processing. This ensures current/upcoming events are synced first during initial imports.
+7. **Batch processing**: Events are processed in configurable batches (default: 50 events per batch).
+8. **Inter-batch delay**: A configurable delay (default: 500ms) between batches allows the UI to remain responsive.
+9. **Yielding to main thread**: Within each batch, the extension periodically yields control back to the browser to prevent blocking.
+10. **Duplicate detection**: Events with the same UID (recurring events) are deduplicated to prevent creating multiple blocks for the same event.
 
 ## Quality Gates
 
