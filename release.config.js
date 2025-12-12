@@ -1,0 +1,36 @@
+/**
+ * Semantic Release configuration responsible for orchestrating versioning and publishing steps.
+ */
+export default {
+  branches: ["main"],
+  plugins: [
+    [
+      "@semantic-release/commit-analyzer",
+      {
+        preset: "conventionalcommits",
+      },
+    ],
+    "@semantic-release/release-notes-generator",
+    "@semantic-release/changelog",
+    [
+      "@semantic-release/npm",
+      {
+        npmPublish: false,
+      },
+    ],
+    "@semantic-release/git",
+    [
+      "@semantic-release/exec",
+      {
+        prepareCmd:
+          "zip -qq -r roam-ical-sync-${nextRelease.version}.zip dist-ical README.md logo.png LICENSE package.json",
+      },
+    ],
+    [
+      "@semantic-release/github",
+      {
+        assets: "roam-ical-sync-*.zip",
+      },
+    ],
+  ],
+};
