@@ -9,6 +9,7 @@ import {
   DEFAULT_EXCLUDE_PATTERNS,
   DEFAULT_SYNC_DAYS_PAST,
   DEFAULT_SYNC_DAYS_FUTURE,
+  DEFAULT_TITLE_PREFIX,
 } from "./constants";
 import { logWarn } from "./logger";
 import type { ExtensionAPI } from "./main";
@@ -280,6 +281,7 @@ export type SettingsSnapshot = {
   excludePatterns: RegExp[];
   syncDaysPast: number;
   syncDaysFuture: number;
+  titlePrefix: string;
 };
 
 export type SettingsHandle =
@@ -304,6 +306,7 @@ const SETTINGS_KEYS = {
   excludePatterns: "exclude_title_patterns",
   syncDaysPast: "sync_days_past",
   syncDaysFuture: "sync_days_future",
+  titlePrefix: "title_prefix",
 } as const;
 
 import { DEFAULT_CORS_PROXY } from "./ical";
@@ -319,6 +322,7 @@ const DEFAULT_SETTINGS: Record<string, unknown> = {
   [SETTINGS_KEYS.excludePatterns]: DEFAULT_EXCLUDE_PATTERNS,
   [SETTINGS_KEYS.syncDaysPast]: DEFAULT_SYNC_DAYS_PAST,
   [SETTINGS_KEYS.syncDaysFuture]: DEFAULT_SYNC_DAYS_FUTURE,
+  [SETTINGS_KEYS.titlePrefix]: DEFAULT_TITLE_PREFIX,
 };
 
 const SETTINGS_TEMPLATE: InputTextNode[] = [
@@ -332,6 +336,7 @@ const SETTINGS_TEMPLATE: InputTextNode[] = [
   { text: "Exclude Title Patterns (regex, one per line)", children: [{ text: DEFAULT_EXCLUDE_PATTERNS }] },
   { text: "Sync Days Past", children: [{ text: String(DEFAULT_SYNC_DAYS_PAST) }] },
   { text: "Sync Days Future", children: [{ text: String(DEFAULT_SYNC_DAYS_FUTURE) }] },
+  { text: "Title Prefix", children: [{ text: DEFAULT_TITLE_PREFIX }] },
 ];
 
 export async function initializeSettings(
@@ -393,6 +398,7 @@ function readSettingsFromPanel(
     getNumber(allSettings, SETTINGS_KEYS.syncDaysFuture, DEFAULT_SYNC_DAYS_FUTURE),
     0
   );
+  const titlePrefix = getString(allSettings, SETTINGS_KEYS.titlePrefix) ?? DEFAULT_TITLE_PREFIX;
 
   return {
     pagePrefix,
@@ -405,6 +411,7 @@ function readSettingsFromPanel(
     excludePatterns,
     syncDaysPast,
     syncDaysFuture,
+    titlePrefix,
   };
 }
 
@@ -486,6 +493,12 @@ function readSettingsFromPage(pageUid: string): SettingsSnapshot {
     0
   );
 
+  const titlePrefix = getSettingValueFromTree({
+    tree,
+    key: "Title Prefix",
+    defaultValue: DEFAULT_TITLE_PREFIX,
+  });
+
   return {
     pagePrefix,
     intervalMs,
@@ -497,6 +510,7 @@ function readSettingsFromPage(pageUid: string): SettingsSnapshot {
     excludePatterns,
     syncDaysPast,
     syncDaysFuture,
+    titlePrefix,
   };
 }
 
@@ -837,6 +851,16 @@ function registerSettingsPanel(extensionAPI: ExtensionAPI) {
         action: {
           type: "reactComponent",
           component: TextInput(SETTINGS_KEYS.syncDaysFuture, "number", String(DEFAULT_SYNC_DAYS_FUTURE)),
+        },
+      },
+      {
+        id: SETTINGS_KEYS.titlePrefix,
+        name: "Title Prefix",
+        description:
+          "Optional prefix prepended to event titles. Can be a tag like #gcal or any text. Leave empty for no prefix. Default: #gcal.",
+        action: {
+          type: "reactComponent",
+          component: TextInput(SETTINGS_KEYS.titlePrefix, "text", DEFAULT_TITLE_PREFIX),
         },
       },
     ],

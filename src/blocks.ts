@@ -21,6 +21,7 @@ import {
   ICAL_END_PROPERTY,
   DEFAULT_BATCH_SIZE,
   DEFAULT_BATCH_DELAY_MS,
+  DEFAULT_TITLE_PREFIX,
 } from "./constants";
 
 import {
@@ -67,6 +68,7 @@ export type BatchConfig = {
   batchSize: number;
   batchDelayMs: number;
   excludePatterns: RegExp[];
+  titlePrefix: string;
 };
 
 /**
@@ -157,6 +159,7 @@ export async function writeBlocks(
     batchSize: batchConfig?.batchSize ?? DEFAULT_BATCH_SIZE,
     batchDelayMs: batchConfig?.batchDelayMs ?? DEFAULT_BATCH_DELAY_MS,
     excludePatterns: batchConfig?.excludePatterns ?? [],
+    titlePrefix: batchConfig?.titlePrefix ?? DEFAULT_TITLE_PREFIX,
   };
 
   // Collect all events from all calendars
@@ -181,7 +184,7 @@ export async function writeBlocks(
   // Build events with blocks in sorted order
   const sortedEventsWithBlocks: EventWithBlock[] = sortedEvents.map((event) => {
     const calendarName = eventCalendarMap.get(event.uid) ?? "Unknown";
-    const block = buildEventBlock(event, calendarName);
+    const block = buildEventBlock(event, calendarName, config.titlePrefix);
     return { event, calendarName, block };
   });
 
@@ -269,17 +272,22 @@ function sanitizeTagName(name: string): string {
 
 /**
  * Builds the block content for an event.
- * Format: [[Date]] Event Title #calendarName
+ * Format: [prefix] [[Date]] Event Title #calendarName
  *
  * @param event iCal event to format.
  * @param calendarName Calendar name to use as tag.
+ * @param titlePrefix Optional prefix to prepend to the title.
  */
-function buildEventBlock(event: ICalEvent, calendarName: string): BlockPayload {
+function buildEventBlock(event: ICalEvent, calendarName: string, titlePrefix: string): BlockPayload {
   const dateText = event.dtstart ? formatRoamDate(event.dtstart) : "No date";
   const title = safeText(event.summary) || "Untitled event";
   const calendarTag = sanitizeTagName(calendarName);
 
-  const mainText = `[[${dateText}]] ${title} #${calendarTag}`;
+  // Build main text with optional prefix
+  let mainText = `[[${dateText}]] ${title} #${calendarTag}`;
+  if (titlePrefix && titlePrefix.trim()) {
+    mainText = `${titlePrefix.trim()} ${mainText}`;
+  }
   const children: BlockPayload[] = [];
 
   // Always add ical-id for identification

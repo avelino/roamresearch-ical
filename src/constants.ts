@@ -28,3 +28,6 @@ export const DEFAULT_EXCLUDE_PATTERNS = "^Busy$";
 /** Default sync window in days (past and future) */
 export const DEFAULT_SYNC_DAYS_PAST = 30;
 export const DEFAULT_SYNC_DAYS_FUTURE = 30;
+
+/** Default title prefix for event blocks */
+export const DEFAULT_TITLE_PREFIX = "#gcal";

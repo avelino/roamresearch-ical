@@ -215,6 +215,7 @@ async function syncCalendars(trigger: "manual" | "auto") {
         batchSize: settings.batchSize,
         batchDelayMs: settings.batchDelayMs,
         excludePatterns: settings.excludePatterns,
+        titlePrefix: settings.titlePrefix,
       }
     );
 

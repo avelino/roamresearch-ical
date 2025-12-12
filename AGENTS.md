@@ -69,7 +69,7 @@
 - `initializeSettings`: Detects settings panel support; registers panel or creates config page.
 - `readSettings`: Returns `SettingsSnapshot` from panel or page-based config.
 - `parseCalendarsConfig`: Parses calendar URL list from settings (format: `name|url`).
-- Settings keys: `page_prefix`, `sync_interval_minutes`, `calendars`, `cors_proxy`, `enable_debug_logs`, `batch_size`, `batch_delay_ms`, `exclude_title_patterns`, `sync_days_past`, `sync_days_future`.
+- Settings keys: `page_prefix`, `sync_interval_minutes`, `calendars`, `cors_proxy`, `enable_debug_logs`, `batch_size`, `batch_delay_ms`, `exclude_title_patterns`, `sync_days_past`, `sync_days_future`, `title_prefix`.
 
 ### scheduler.ts
 
@@ -91,7 +91,7 @@
 ### constants.ts
 
 - Property names: `ical-id`, `ical-desc`, `ical-location`, `ical-url`, `ical-end`.
-- Default values: page prefix (`ical`), batch size (`50`), batch delay (`500ms`), sync days past (`30`), sync days future (`30`).
+- Default values: page prefix (`ical`), batch size (`50`), batch delay (`500ms`), sync days past (`30`), sync days future (`30`), title prefix (`#gcal`).
 - UI constants: command label, topbar button ID/icon.
 
 ## Block Structure
@@ -99,7 +99,7 @@
 Events are written with the following structure:
 
 ```
-[[Date]] Event title #calendar-name
+#gcal [[Date]] Event title #calendar-name
   ical-id:: unique-event-uid
   ical-desc:: Full description (if present)
   ical-location:: Location (if present)
@@ -107,7 +107,7 @@ Events are written with the following structure:
   ical-end:: [[End Date]] (if different from start)
 ```
 
-The calendar name is sanitized to lowercase, spaces replaced with hyphens, and special characters removed (e.g., "Work Calendar" becomes `#work-calendar`).
+The calendar name is sanitized to lowercase, spaces replaced with hyphens, and special characters removed (e.g., "Work Calendar" becomes `#work-calendar`). The title prefix (default: `#gcal`) is prepended before the date and can be customized or left empty.
 
 ## Settings Reference
 
@@ -123,6 +123,7 @@ The calendar name is sanitized to lowercase, spaces replaced with hyphens, and s
 | Exclude Title Patterns | `exclude_title_patterns` | `^Busy$` | Regex patterns (one per line) to exclude events by title |
 | Sync Days Past | `sync_days_past` | `30` | Number of days in the past to include events |
 | Sync Days Future | `sync_days_future` | `30` | Number of days in the future to include events |
+| Title Prefix | `title_prefix` | `#gcal` | Optional prefix prepended to event titles. Can be any text or tag |
 
 ## Performance & Batch Processing
 
