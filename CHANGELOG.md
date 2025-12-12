@@ -1,3 +1,11 @@
+# 1.0.0 (2025-12-12)
+
+
+### Features
+
+* overhaul performance guidelines, non-blocking batch sync improvements ([2751d7f](https://github.com/avelino/roamresearch-ical/commit/2751d7f9e194192146a2b5b21b9b067762bfb93a))
+* **settings:** add custom title prefix option for event blocks ([d3209fd](https://github.com/avelino/roamresearch-ical/commit/d3209fd2fc78a32c0a29aced3ea30a7c8bed8036))
+
 # Changelog
 
 All notable changes to this project will be documented in this file.
