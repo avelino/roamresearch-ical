@@ -23,7 +23,7 @@ export default {
       "@semantic-release/exec",
       {
         prepareCmd:
-          "zip -qq -r roam-ical-sync-${nextRelease.version}.zip dist-ical README.md logo.png LICENSE package.json",
+          "zip -qq -r roam-ical-sync-${nextRelease.version}.zip extension.js README.md logo.png LICENSE package.json",
       },
     ],
     [

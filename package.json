@@ -2,7 +2,7 @@
   "name": "roam-ical-sync",
   "version": "1.0.0",
   "type": "module",
-  "main": "dist-ical/extension.js",
+  "main": "extension.js",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",

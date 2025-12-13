@@ -2,7 +2,7 @@
 
 ## Project Snapshot
 
-- Roam Research extension written in strict TypeScript, bundled with Vite (`npx pnpm build`).
+- Roam Research extension written in strict TypeScript, bundled with Vite (`./build.sh` or `npm run build`).
 - Main entry: `src/main.ts`; supporting modules: `ical.ts`, `blocks.ts`, `settings.ts`, `scheduler.ts`, `ui.ts`, `logger.ts`, `constants.ts`.
 - Exports `{ onload, onunload }` object for Roam Depot compatibility (ES module format).
 - Interacts with the Roam runtime via direct `roamAlphaAPI` calls for UI, scheduling, and page mutations; fetches iCal feeds via HTTPS.
@@ -12,9 +12,9 @@
 
 ## Environment & Tooling
 
-- Package manager: pnpm (`npx pnpm ...`); lockfile `pnpm-lock.yaml`.
-- Install deps before running scripts: `npx pnpm install`.
-- Build command: `npx pnpm build` (runs `tsc` then `vite build` producing `dist-ical/extension.js`).
+- Package manager: npm (CI uses `./build.sh`); lockfile `pnpm-lock.yaml` for local development with pnpm.
+- Install deps before running scripts: `npm install` or `npx pnpm install`.
+- Build command: `./build.sh` or `npm run build` (runs `tsc` then `vite build` producing `extension.js` in project root).
 - Lint command: `npx pnpm exec eslint ./src --ext .ts`.
 - Check command: `npx pnpm check` (runs lint + build in sequence).
 - Target Node version matches CI (`actions/setup-node@v3`) using Node 20.8+.
@@ -142,6 +142,6 @@ To prevent UI freezing with large calendars:
 
 ## Quality Gates
 
-- Run `npx pnpm install` when dependencies change.
+- Run `npm install` or `npx pnpm install` when dependencies change.
 - Run `npx pnpm exec eslint ./src --ext .ts`.
-- Run `npx pnpm build` to ensure type-checking and bundling succeed.
+- Run `./build.sh` or `npm run build` to ensure type-checking and bundling succeed.
