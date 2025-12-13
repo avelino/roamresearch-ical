@@ -274,7 +274,6 @@ export type SettingsSnapshot = {
   pagePrefix: string;
   intervalMs: number;
   calendars: CalendarConfig[];
-  corsProxy: string;
   enableDebugLogs: boolean;
   batchSize: number;
   batchDelayMs: number;
@@ -299,7 +298,6 @@ const SETTINGS_KEYS = {
   pagePrefix: "page_prefix",
   intervalMinutes: "sync_interval_minutes",
   calendars: "calendars",
-  corsProxy: "cors_proxy",
   enableDebugLogs: "enable_debug_logs",
   batchSize: "batch_size",
   batchDelayMs: "batch_delay_ms",
@@ -309,13 +307,10 @@ const SETTINGS_KEYS = {
   titlePrefix: "title_prefix",
 } as const;
 
-import { DEFAULT_CORS_PROXY } from "./ical";
-
 const DEFAULT_SETTINGS: Record<string, unknown> = {
   [SETTINGS_KEYS.pagePrefix]: DEFAULT_PAGE_PREFIX,
   [SETTINGS_KEYS.intervalMinutes]: 30,
   [SETTINGS_KEYS.calendars]: "",
-  [SETTINGS_KEYS.corsProxy]: DEFAULT_CORS_PROXY,
   [SETTINGS_KEYS.enableDebugLogs]: false,
   [SETTINGS_KEYS.batchSize]: DEFAULT_BATCH_SIZE,
   [SETTINGS_KEYS.batchDelayMs]: DEFAULT_BATCH_DELAY_MS,
@@ -329,7 +324,6 @@ const SETTINGS_TEMPLATE: InputTextNode[] = [
   { text: "Target Page Prefix", children: [{ text: DEFAULT_PAGE_PREFIX }] },
   { text: "Sync Interval (minutes)", children: [{ text: "30" }] },
   { text: "Calendars (name|url, one per line)", children: [{ text: "" }] },
-  { text: "CORS Proxy", children: [{ text: DEFAULT_CORS_PROXY }] },
   { text: "Enable Debug Logs" },
   { text: "Batch Size", children: [{ text: String(DEFAULT_BATCH_SIZE) }] },
   { text: "Batch Delay (ms)", children: [{ text: String(DEFAULT_BATCH_DELAY_MS) }] },
@@ -374,7 +368,6 @@ function readSettingsFromPanel(
   );
   const calendarsRaw = getString(allSettings, SETTINGS_KEYS.calendars) ?? "";
   const calendars = parseCalendarsConfig(calendarsRaw);
-  const corsProxy = getString(allSettings, SETTINGS_KEYS.corsProxy) || DEFAULT_CORS_PROXY;
   const enableDebugLogs = getBoolean(
     allSettings,
     SETTINGS_KEYS.enableDebugLogs,
@@ -404,7 +397,6 @@ function readSettingsFromPanel(
     pagePrefix,
     intervalMs: intervalMinutes * 60 * 1000,
     calendars,
-    corsProxy,
     enableDebugLogs,
     batchSize,
     batchDelayMs,
@@ -441,12 +433,6 @@ function readSettingsFromPage(pageUid: string): SettingsSnapshot {
     defaultValue: [],
   }).join("\n");
   const calendars = parseCalendarsConfig(calendarsRaw);
-
-  const corsProxy = getSettingValueFromTree({
-    tree,
-    key: "CORS Proxy",
-    defaultValue: DEFAULT_CORS_PROXY,
-  }).trim() || DEFAULT_CORS_PROXY;
 
   const enableDebugLogs = hasFlag(tree, "Enable Debug Logs");
 
@@ -503,7 +489,6 @@ function readSettingsFromPage(pageUid: string): SettingsSnapshot {
     pagePrefix,
     intervalMs,
     calendars,
-    corsProxy,
     enableDebugLogs,
     batchSize,
     batchDelayMs,
@@ -781,16 +766,6 @@ function registerSettingsPanel(extensionAPI: ExtensionAPI) {
         action: {
           type: "reactComponent",
           component: TextArea(SETTINGS_KEYS.calendars, "Work|https://example.com/calendar.ics"),
-        },
-      },
-      {
-        id: SETTINGS_KEYS.corsProxy,
-        name: "CORS Proxy",
-        description:
-          "CORS proxy URL to bypass browser restrictions. The calendar URL will be appended. Default: https://corsproxy.io/?",
-        action: {
-          type: "reactComponent",
-          component: TextInput(SETTINGS_KEYS.corsProxy, "text", DEFAULT_CORS_PROXY),
         },
       },
       {

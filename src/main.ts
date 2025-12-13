@@ -179,7 +179,7 @@ async function syncCalendars(trigger: "manual" | "auto") {
       syncDaysFuture: settings.syncDaysFuture,
     });
 
-    const rawCalendars: ICalCalendar[] = await fetchAllCalendars(settings.calendars, settings.corsProxy);
+    const rawCalendars: ICalCalendar[] = await fetchAllCalendars(settings.calendars);
     const totalRawEvents = rawCalendars.reduce((sum, cal) => sum + cal.events.length, 0);
 
     // Filter events by date range (async to yield during filtering)

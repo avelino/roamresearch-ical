@@ -14,6 +14,27 @@ function yieldToMain(): Promise<void> {
 }
 
 /**
+ * Gets the CORS proxy URL from Roam's native API.
+ * Uses roamAlphaAPI.constants.corsAnywhereProxyUrl which is hosted by the Roam team.
+ * @see https://roamresearch.com/#/app/developer-documentation/page/TuLoib22N
+ */
+function getRoamProxyUrl(): string {
+  const roamAPI = (window as unknown as {
+    roamAlphaAPI?: {
+      constants?: {
+        corsAnywhereProxyUrl?: string;
+      };
+    };
+  }).roamAlphaAPI;
+
+  const proxyUrl = roamAPI?.constants?.corsAnywhereProxyUrl;
+  if (!proxyUrl) {
+    throw new Error("Roam CORS proxy URL not available. Make sure you are running in Roam Research.");
+  }
+  return proxyUrl;
+}
+
+/**
  * Number of operations between yields during parsing.
  */
 const PARSE_YIELD_BATCH_SIZE = 50;
@@ -171,37 +192,24 @@ export async function parseICalContent(content: string, calendarName: string): P
 }
 
 /**
- * Default CORS proxy URL. Users can configure their own.
- * corsproxy.io format: https://corsproxy.io/?url={encoded_url}
- */
-export const DEFAULT_CORS_PROXY = "https://corsproxy.io/?url=";
-
-/**
- * Builds the proxied URL for corsproxy.io or similar CORS proxies.
- * corsproxy.io format: https://corsproxy.io/?url={encoded_url}
- *
- * @param proxyUrl The proxy base URL (e.g., "https://corsproxy.io/?url=")
+ * Builds the proxied URL using Roam's native CORS proxy.
+ * Format: {proxyUrl}/{targetUrl}
+ * @see https://roamresearch.com/#/app/developer-documentation/page/TuLoib22N
  * @param targetUrl The target URL to proxy
  */
-function buildProxiedUrl(proxyUrl: string, targetUrl: string): string {
-  // corsproxy.io expects: https://corsproxy.io/?url={encoded_url}
-  // If proxy ends with "=" we just append the encoded URL (corsproxy.io style)
-  // Otherwise we append ?url= for custom proxies
-  if (proxyUrl.endsWith("=")) {
-    return `${proxyUrl}${encodeURIComponent(targetUrl)}`;
-  }
-  return `${proxyUrl}?url=${encodeURIComponent(targetUrl)}`;
+function buildProxiedUrl(targetUrl: string): string {
+  const proxyUrl = getRoamProxyUrl();
+  return `${proxyUrl}/${targetUrl}`;
 }
 
 /**
- * Fetches content through a CORS proxy.
+ * Fetches content through Roam's native CORS proxy.
  * Yields to main thread before and after fetch to prevent UI freezing.
  *
  * @param url Original URL to fetch.
- * @param corsProxy CORS proxy URL prefix.
  */
-async function fetchWithCorsProxy(url: string, corsProxy: string): Promise<string> {
-  const proxyUrl = buildProxiedUrl(corsProxy, url);
+async function fetchWithCorsProxy(url: string): Promise<string> {
+  const proxyUrl = buildProxiedUrl(url);
 
   logDebug("fetch_with_proxy", { originalUrl: url, proxyUrl });
 
@@ -227,20 +235,16 @@ async function fetchWithCorsProxy(url: string, corsProxy: string): Promise<strin
 
 /**
  * Fetches and parses an iCal feed from a URL.
- * Always uses CORS proxy since most calendar providers block cross-origin requests.
+ * Uses Roam's native CORS proxy (roamAlphaAPI.constants.corsAnywhereProxyUrl).
  * Yields to main thread to prevent UI freezing.
  *
  * @param config Calendar configuration with name and URL.
- * @param corsProxy CORS proxy URL prefix.
  */
-export async function fetchICalCalendar(
-  config: CalendarConfig,
-  corsProxy: string = DEFAULT_CORS_PROXY
-): Promise<ICalCalendar> {
-  logDebug("fetch_ical_start", { name: config.name, url: config.url, proxy: corsProxy });
+export async function fetchICalCalendar(config: CalendarConfig): Promise<ICalCalendar> {
+  logDebug("fetch_ical_start", { name: config.name, url: config.url });
 
   try {
-    const content = await fetchWithCorsProxy(config.url, corsProxy);
+    const content = await fetchWithCorsProxy(config.url);
 
     // Yield before parsing
     await yieldToMain();
@@ -267,14 +271,11 @@ export async function fetchICalCalendar(
 /**
  * Fetches multiple iCal calendars sequentially with yields between each.
  * Sequential processing prevents UI freezing when parsing multiple large calendars.
+ * Uses Roam's native CORS proxy (roamAlphaAPI.constants.corsAnywhereProxyUrl).
  *
  * @param configs Array of calendar configurations.
- * @param corsProxy CORS proxy URL prefix.
  */
-export async function fetchAllCalendars(
-  configs: CalendarConfig[],
-  corsProxy: string = DEFAULT_CORS_PROXY
-): Promise<ICalCalendar[]> {
+export async function fetchAllCalendars(configs: CalendarConfig[]): Promise<ICalCalendar[]> {
   if (configs.length === 0) {
     return [];
   }
@@ -287,7 +288,7 @@ export async function fetchAllCalendars(
     const config = configs[i];
 
     try {
-      const calendar = await fetchICalCalendar(config, corsProxy);
+      const calendar = await fetchICalCalendar(config);
       calendars.push(calendar);
 
       // Yield between calendars to ensure UI responsiveness

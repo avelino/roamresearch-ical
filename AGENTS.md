@@ -44,8 +44,8 @@
 ### ical.ts
 
 - `parseICalContent`: Parses raw .ics file content into `ICalEvent[]`.
-- `fetchICalCalendar`: Fetches and parses a single calendar URL.
-- `fetchAllCalendars`: Fetches multiple calendars in parallel.
+- `fetchICalCalendar`: Fetches and parses a single calendar URL. Uses Roam's native CORS proxy.
+- `fetchAllCalendars`: Fetches multiple calendars sequentially. Uses Roam's native CORS proxy (`roamAlphaAPI.constants.corsAnywhereProxyUrl`).
 - `formatRoamDate`: Converts Date to Roam format (e.g., "January 2nd, 2025").
 - `safeText`: Sanitizes text for block content.
 - `sanitizeEventId`: Creates safe event IDs for page names.
@@ -69,7 +69,7 @@
 - `initializeSettings`: Detects settings panel support; registers panel or creates config page.
 - `readSettings`: Returns `SettingsSnapshot` from panel or page-based config.
 - `parseCalendarsConfig`: Parses calendar URL list from settings (format: `name|url`).
-- Settings keys: `page_prefix`, `sync_interval_minutes`, `calendars`, `cors_proxy`, `enable_debug_logs`, `batch_size`, `batch_delay_ms`, `exclude_title_patterns`, `sync_days_past`, `sync_days_future`, `title_prefix`.
+- Settings keys: `page_prefix`, `sync_interval_minutes`, `calendars`, `enable_debug_logs`, `batch_size`, `batch_delay_ms`, `exclude_title_patterns`, `sync_days_past`, `sync_days_future`, `title_prefix`.
 
 ### scheduler.ts
 
@@ -116,7 +116,6 @@ The calendar name is sanitized to lowercase, spaces replaced with hyphens, and s
 | Target Page Prefix | `page_prefix` | `ical` | Prefix for event pages |
 | Sync Interval | `sync_interval_minutes` | `30` | Minutes between auto-syncs (min: 1) |
 | Calendars | `calendars` | (empty) | Calendar URLs in format `name|url`, one per line |
-| CORS Proxy | `cors_proxy` | `https://corsproxy.io/?url=` | CORS proxy URL to bypass browser restrictions |
 | Enable Debug Logs | `enable_debug_logs` | `false` | Show debug logs in console |
 | Batch Size | `batch_size` | `50` | Number of events to process per batch. Lower values reduce UI freezing |
 | Batch Delay (ms) | `batch_delay_ms` | `500` | Delay between batches in milliseconds. Higher values reduce UI freezing |
@@ -124,6 +123,8 @@ The calendar name is sanitized to lowercase, spaces replaced with hyphens, and s
 | Sync Days Past | `sync_days_past` | `30` | Number of days in the past to include events |
 | Sync Days Future | `sync_days_future` | `30` | Number of days in the future to include events |
 | Title Prefix | `title_prefix` | `#gcal` | Optional prefix prepended to event titles. Can be any text or tag |
+
+> **CORS Proxy**: The extension uses Roam's native CORS proxy (`roamAlphaAPI.constants.corsAnywhereProxyUrl`) to bypass browser restrictions when fetching calendar feeds. This proxy is hosted by the Roam team and only works from Roam domains.
 
 ## Performance & Batch Processing
 
