@@ -50,6 +50,37 @@ export interface ICalEvent {
   dtend: Date | null;
   location: string;
   url: string;
+  meetingUrl?: string;
+}
+
+/**
+ * Extracts video conference URLs (Zoom, Meet, Teams, etc.) from text.
+ */
+export function extractMeetingUrl(text: string | null | undefined): string | undefined {
+  if (!text) return undefined;
+
+  // Regex patterns for common video conference services
+  const patterns = [
+    // Zoom: matches /j/ and /my/ links, optionally with password
+    /https:\/\/(?:[\w-]+\.)?zoom\.us\/(?:j|my)\/[a-zA-Z0-9]+(?:\?pwd=[a-zA-Z0-9]+)?/i,
+    // Google Meet: matches standard meet.google.com patterns
+    /https:\/\/meet\.google\.com\/[a-z]{3}-[a-z]{4}-[a-z]{3}/i,
+    // Microsoft Teams: matches meetup-join links
+    /https:\/\/teams\.microsoft\.com\/l\/meetup-join\/[a-zA-Z0-9%._-]+/i,
+    // Webex: matches standard join links
+    /https:\/\/(?:[\w-]+\.)?webex\.com\/(?:meet|join|m)\/[a-zA-Z0-9]+/i,
+    // GoToMeeting
+    /https:\/\/global\.gotomeeting\.com\/join\/[0-9]+/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) {
+      return match[0];
+    }
+  }
+
+  return undefined;
 }
 
 /**
@@ -157,14 +188,25 @@ export async function parseICalContent(content: string, calendarName: string): P
       try {
         const event = new ICAL.Event(vevent);
 
+        const location = event.location || "";
+        const url = String(vevent.getFirstPropertyValue("url") || "");
+        const description = event.description || "";
+
+        // Try to find meeting URL in location, description, or explicit URL property
+        const meetingUrl =
+          extractMeetingUrl(location) ||
+          extractMeetingUrl(description) ||
+          extractMeetingUrl(url);
+
         const icalEvent: ICalEvent = {
           uid: event.uid || "",
           summary: event.summary || "",
-          description: event.description || "",
+          description: description,
           dtstart: icalTimeToDate(event.startDate),
           dtend: icalTimeToDate(event.endDate),
-          location: event.location || "",
-          url: String(vevent.getFirstPropertyValue("url") || ""),
+          location: location,
+          url: url,
+          meetingUrl: meetingUrl,
         };
 
         if (icalEvent.uid) {

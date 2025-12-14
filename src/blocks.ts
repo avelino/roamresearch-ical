@@ -18,6 +18,7 @@ import {
   ICAL_DESC_PROPERTY,
   ICAL_LOCATION_PROPERTY,
   ICAL_URL_PROPERTY,
+  ICAL_MEETING_URL_PROPERTY,
   ICAL_END_PROPERTY,
   DEFAULT_BATCH_SIZE,
   DEFAULT_BATCH_DELAY_MS,
@@ -303,6 +304,13 @@ function buildEventBlock(event: ICalEvent, calendarName: string, titlePrefix: st
   const location = safeText(event.location);
   if (location) {
     children.push(createPropertyBlock(ICAL_LOCATION_PROPERTY, location));
+  }
+
+  // Add meeting URL if present (detected from location/desc/url)
+  if (event.meetingUrl) {
+    children.push(
+      createPropertyBlock(ICAL_MEETING_URL_PROPERTY, `[**JOIN MEETING**](${event.meetingUrl})`)
+    );
   }
 
   // Add URL if present
