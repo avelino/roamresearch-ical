@@ -309,7 +309,7 @@ function buildEventBlock(event: ICalEvent, calendarName: string, titlePrefix: st
   // Add meeting URL if present (detected from location/desc/url)
   if (event.meetingUrl) {
     children.push(
-      createPropertyBlock(ICAL_MEETING_URL_PROPERTY, `[**JOIN MEETING**](${event.meetingUrl})`)
+      createPropertyBlock(ICAL_MEETING_URL_PROPERTY, `**[JOIN MEETING](${event.meetingUrl})**`)
     );
   }
 
