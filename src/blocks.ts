@@ -333,6 +333,17 @@ function buildEventBlock(
       if (!pageName) {
         // 2. Fallback: Use name or email part
         let displayName = attendee.name;
+
+        // If name looks like an email (contains @), treat it as an email to be parsed
+        if (displayName && displayName.includes("@")) {
+          // Force parsing logic below by setting it to empty, but keeping attendee.email if valid
+          // If attendee.name IS the email, we use that as the source email
+          if (!attendee.email) {
+            attendee.email = displayName;
+          }
+          displayName = "";
+        }
+
         if (!displayName && attendee.email) {
           // Extract name from email (avelino from avelino@example.com)
           const localPart = attendee.email.split("@")[0];
