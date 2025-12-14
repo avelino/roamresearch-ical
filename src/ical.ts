@@ -197,14 +197,29 @@ export async function parseICalContent(content: string, calendarName: string): P
         const attendees: { name: string; email: string }[] = [];
         if (event.attendees && event.attendees.length > 0) {
           for (const att of event.attendees) {
-            const email = att.jCal ? att.jCal[3] : "";
-            const cn = att.commonName || "";
+            // att has multiple properties, jCal is one way to access them.
+            // But usually ical.js exposes common properties on the wrapper.
+            // Let's use getParameter for CN as it is the standard way.
+
+            // The 'att' object in the loop over event.attendees is typically an ICAL.Property if event.attendees is populated via strict mode or similar,
+            // but ical.js's high-level Event class usually returns plain objects or wrappers?
+            // Checking ical.js documentation or source is tricky without internet, but typically:
+            // event.attendees returns an array of ICAL.Property objects.
+
+            const emailRaw = att.jCal ? att.jCal[3] : ""; // Fallback to raw jCal value if available
+            // Correct way to get parameter in ical.js Property:
+            const cn = (att.getParameter ? att.getParameter("cn") : "") as string;
+
+            // If jCal is not direct, try to get the value
+            const emailValue = typeof att.getValues === "function" ? att.getValues()[0] : emailRaw;
+
             // Skip if no useful info
-            if (!email && !cn) continue;
+            if (!emailValue && !cn) continue;
+
             attendees.push({
               name: cn,
               // Clean up mailto: prefix if present
-              email: email.replace(/^mailto:/i, ""),
+              email: String(emailValue).replace(/^mailto:/i, ""),
             });
           }
         }

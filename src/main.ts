@@ -220,6 +220,7 @@ async function syncCalendars(trigger: "manual" | "auto") {
         batchDelayMs: settings.batchDelayMs,
         excludePatterns: settings.excludePatterns,
         titlePrefix: settings.titlePrefix,
+        attendeeAliases: settings.attendeeAliases,
       }
     );
 
