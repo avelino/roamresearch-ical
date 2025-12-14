@@ -1,3 +1,18 @@
+# [1.1.0](https://github.com/avelino/roamresearch-ical/compare/v1.0.0...v1.1.0) (2025-12-14)
+
+
+### Bug Fixes
+
+* buildEventBlock's JOIN MEETING link is now bolded correctly ([84314d0](https://github.com/avelino/roamresearch-ical/commit/84314d0502333bd966c3514dae11fa98d897ea28))
+* compilation errors in attendee extraction and writeBlocks call ([014e843](https://github.com/avelino/roamresearch-ical/commit/014e843c7965e2c35f919937f995f1c1e4875836))
+* prevent email addresses from being used as Roam page titles ([dd1616b](https://github.com/avelino/roamresearch-ical/commit/dd1616bd49fa228b71320342f4c1dcf15f126b07))
+
+
+### Features
+
+* add "Join Meeting" button detection for events ([10a030f](https://github.com/avelino/roamresearch-ical/commit/10a030fffb12b790ebb64513b22d03f6611bf908))
+* add attendee extraction and alias mapping ([4df37a4](https://github.com/avelino/roamresearch-ical/commit/4df37a48a7cda75dbb3609c4dd712ea4110f979e))
+
 # 1.0.0 (2025-12-12)
 
 
