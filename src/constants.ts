@@ -7,6 +7,7 @@ export const ICAL_DESC_PROPERTY = "ical-desc";
 export const ICAL_LOCATION_PROPERTY = "ical-location";
 export const ICAL_URL_PROPERTY = "ical-url";
 export const ICAL_MEETING_URL_PROPERTY = "ical-meeting-url";
+export const ICAL_ATTENDEES_PROPERTY = "ical-attendees";
 export const ICAL_END_PROPERTY = "ical-end";
 
 /** Config page title for fallback settings */

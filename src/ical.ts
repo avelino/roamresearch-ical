@@ -51,6 +51,7 @@ export interface ICalEvent {
   location: string;
   url: string;
   meetingUrl?: string;
+  attendees: { name: string; email: string }[];
 }
 
 /**
@@ -192,6 +193,22 @@ export async function parseICalContent(content: string, calendarName: string): P
         const url = String(vevent.getFirstPropertyValue("url") || "");
         const description = event.description || "";
 
+        // Extract attendees
+        const attendees: { name: string; email: string }[] = [];
+        if (event.attendees && event.attendees.length > 0) {
+          for (const att of event.attendees) {
+            const email = att.jCal ? att.jCal[3] : "";
+            const cn = att.commonName || "";
+            // Skip if no useful info
+            if (!email && !cn) continue;
+            attendees.push({
+              name: cn,
+              // Clean up mailto: prefix if present
+              email: email.replace(/^mailto:/i, ""),
+            });
+          }
+        }
+
         // Try to find meeting URL in location, description, or explicit URL property
         const meetingUrl =
           extractMeetingUrl(location) ||
@@ -207,6 +224,7 @@ export async function parseICalContent(content: string, calendarName: string): P
           location: location,
           url: url,
           meetingUrl: meetingUrl,
+          attendees,
         };
 
         if (icalEvent.uid) {

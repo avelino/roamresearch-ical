@@ -278,6 +278,7 @@ export type SettingsSnapshot = {
   batchSize: number;
   batchDelayMs: number;
   excludePatterns: RegExp[];
+  attendeeAliases: Map<string, string>;
   syncDaysPast: number;
   syncDaysFuture: number;
   titlePrefix: string;
@@ -302,6 +303,7 @@ const SETTINGS_KEYS = {
   batchSize: "batch_size",
   batchDelayMs: "batch_delay_ms",
   excludePatterns: "exclude_title_patterns",
+  attendeeAliases: "attendee_aliases",
   syncDaysPast: "sync_days_past",
   syncDaysFuture: "sync_days_future",
   titlePrefix: "title_prefix",
@@ -315,6 +317,7 @@ const DEFAULT_SETTINGS: Record<string, unknown> = {
   [SETTINGS_KEYS.batchSize]: DEFAULT_BATCH_SIZE,
   [SETTINGS_KEYS.batchDelayMs]: DEFAULT_BATCH_DELAY_MS,
   [SETTINGS_KEYS.excludePatterns]: DEFAULT_EXCLUDE_PATTERNS,
+  [SETTINGS_KEYS.attendeeAliases]: "",
   [SETTINGS_KEYS.syncDaysPast]: DEFAULT_SYNC_DAYS_PAST,
   [SETTINGS_KEYS.syncDaysFuture]: DEFAULT_SYNC_DAYS_FUTURE,
   [SETTINGS_KEYS.titlePrefix]: DEFAULT_TITLE_PREFIX,
@@ -328,6 +331,7 @@ const SETTINGS_TEMPLATE: InputTextNode[] = [
   { text: "Batch Size", children: [{ text: String(DEFAULT_BATCH_SIZE) }] },
   { text: "Batch Delay (ms)", children: [{ text: String(DEFAULT_BATCH_DELAY_MS) }] },
   { text: "Exclude Title Patterns (regex, one per line)", children: [{ text: DEFAULT_EXCLUDE_PATTERNS }] },
+  { text: "Attendee Aliases (CN;Page, one per line)", children: [{ text: "" }] },
   { text: "Sync Days Past", children: [{ text: String(DEFAULT_SYNC_DAYS_PAST) }] },
   { text: "Sync Days Future", children: [{ text: String(DEFAULT_SYNC_DAYS_FUTURE) }] },
   { text: "Title Prefix", children: [{ text: DEFAULT_TITLE_PREFIX }] },
@@ -383,6 +387,8 @@ function readSettingsFromPanel(
   );
   const excludePatternsRaw = getString(allSettings, SETTINGS_KEYS.excludePatterns) ?? DEFAULT_EXCLUDE_PATTERNS;
   const excludePatterns = parseExcludePatterns(excludePatternsRaw);
+  const attendeeAliasesRaw = getString(allSettings, SETTINGS_KEYS.attendeeAliases) ?? "";
+  const attendeeAliases = parseAttendeeAliases(attendeeAliasesRaw);
   const syncDaysPast = Math.max(
     getNumber(allSettings, SETTINGS_KEYS.syncDaysPast, DEFAULT_SYNC_DAYS_PAST),
     0
@@ -401,6 +407,7 @@ function readSettingsFromPanel(
     batchSize,
     batchDelayMs,
     excludePatterns,
+    attendeeAliases,
     syncDaysPast,
     syncDaysFuture,
     titlePrefix,
@@ -461,6 +468,13 @@ function readSettingsFromPage(pageUid: string): SettingsSnapshot {
   }).join("\n");
   const excludePatterns = parseExcludePatterns(excludePatternsRaw);
 
+  const attendeeAliasesRaw = getSettingValuesFromTree({
+    tree,
+    key: "Attendee Aliases",
+    defaultValue: [],
+  }).join("\n");
+  const attendeeAliases = parseAttendeeAliases(attendeeAliasesRaw);
+
   const syncDaysPast = Math.max(
     getSettingIntFromTree({
       tree,
@@ -493,6 +507,7 @@ function readSettingsFromPage(pageUid: string): SettingsSnapshot {
     batchSize,
     batchDelayMs,
     excludePatterns,
+    attendeeAliases,
     syncDaysPast,
     syncDaysFuture,
     titlePrefix,
@@ -533,6 +548,32 @@ function parseExcludePatterns(raw: string): RegExp[] {
   }
 
   return patterns;
+}
+
+/**
+ * Parses attendee aliases from a multi-line string.
+ * Format: "Name;Page" (e.g. "Thiago Avelino;@avelino")
+ */
+function parseAttendeeAliases(raw: string): Map<string, string> {
+  const map = new Map<string, string>();
+  if (!raw) return map;
+
+  const lines = raw.split(/\r?\n/);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    const parts = trimmed.split(";");
+    if (parts.length >= 2) {
+      const key = parts[0].trim().toLowerCase();
+      const value = parts[1].trim();
+      if (key && value) {
+        map.set(key, value);
+      }
+    }
+  }
+
+  return map;
 }
 
 /**
@@ -806,6 +847,16 @@ function registerSettingsPanel(extensionAPI: ExtensionAPI) {
         action: {
           type: "reactComponent",
           component: TextArea(SETTINGS_KEYS.excludePatterns, "^Busy$\n^Private$"),
+        },
+      },
+      {
+        id: SETTINGS_KEYS.attendeeAliases,
+        name: "Attendee Aliases",
+        description:
+          "Map participant names/emails to Roam pages (one per line). Format: Name;Page. Example: Thiago Avelino;@avelino",
+        action: {
+          type: "reactComponent",
+          component: TextArea(SETTINGS_KEYS.attendeeAliases, "Thiago Avelino;@avelino\navelino@example.com;@avelino"),
         },
       },
       {

@@ -19,6 +19,7 @@ import {
   ICAL_LOCATION_PROPERTY,
   ICAL_URL_PROPERTY,
   ICAL_MEETING_URL_PROPERTY,
+  ICAL_ATTENDEES_PROPERTY,
   ICAL_END_PROPERTY,
   DEFAULT_BATCH_SIZE,
   DEFAULT_BATCH_DELAY_MS,
@@ -70,6 +71,7 @@ export type BatchConfig = {
   batchDelayMs: number;
   excludePatterns: RegExp[];
   titlePrefix: string;
+  attendeeAliases: Map<string, string>;
 };
 
 /**
@@ -161,6 +163,7 @@ export async function writeBlocks(
     batchDelayMs: batchConfig?.batchDelayMs ?? DEFAULT_BATCH_DELAY_MS,
     excludePatterns: batchConfig?.excludePatterns ?? [],
     titlePrefix: batchConfig?.titlePrefix ?? DEFAULT_TITLE_PREFIX,
+    attendeeAliases: batchConfig?.attendeeAliases ?? new Map(),
   };
 
   // Collect all events from all calendars
@@ -185,7 +188,7 @@ export async function writeBlocks(
   // Build events with blocks in sorted order
   const sortedEventsWithBlocks: EventWithBlock[] = sortedEvents.map((event) => {
     const calendarName = eventCalendarMap.get(event.uid) ?? "Unknown";
-    const block = buildEventBlock(event, calendarName, config.titlePrefix);
+    const block = buildEventBlock(event, calendarName, config.titlePrefix, config.attendeeAliases);
     return { event, calendarName, block };
   });
 
@@ -278,8 +281,14 @@ function sanitizeTagName(name: string): string {
  * @param event iCal event to format.
  * @param calendarName Calendar name to use as tag.
  * @param titlePrefix Optional prefix to prepend to the title.
+ * @param aliases Map of attendee aliases (Name/Email -> Page).
  */
-function buildEventBlock(event: ICalEvent, calendarName: string, titlePrefix: string): BlockPayload {
+function buildEventBlock(
+  event: ICalEvent,
+  calendarName: string,
+  titlePrefix: string,
+  aliases?: Map<string, string>
+): BlockPayload {
   const dateText = event.dtstart ? formatRoamDate(event.dtstart) : "No date";
   const title = safeText(event.summary) || "Untitled event";
   const calendarTag = sanitizeTagName(calendarName);
@@ -311,6 +320,50 @@ function buildEventBlock(event: ICalEvent, calendarName: string, titlePrefix: st
     children.push(
       createPropertyBlock(ICAL_MEETING_URL_PROPERTY, `**[JOIN MEETING](${event.meetingUrl})**`)
     );
+  }
+
+  // Add attendees
+  if (event.attendees && event.attendees.length > 0) {
+    const attendeeLinks: string[] = [];
+    for (const attendee of event.attendees) {
+      // 1. Check aliases (Name or Email)
+      let pageName =
+        aliases?.get(attendee.name.toLowerCase()) || aliases?.get(attendee.email.toLowerCase());
+
+      if (!pageName) {
+        // 2. Fallback: Use name or email part
+        let displayName = attendee.name;
+        if (!displayName && attendee.email) {
+          // Extract name from email (avelino from avelino@example.com)
+          const localPart = attendee.email.split("@")[0];
+          // Capitalize/Format (avelino -> Avelino)
+          displayName = localPart
+            .split(/[._-]/)
+            .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+            .join(" ");
+        }
+
+        if (displayName) {
+          // 3. Apply standard formatting
+          pageName = displayName.startsWith("@") ? `[[${displayName}]]` : `[[@${displayName}]]`;
+        }
+      } else {
+        // Ensure alias has brackets if it's a page reference
+        if (!pageName.startsWith("[[") && !pageName.startsWith("http")) {
+          pageName = `[[${pageName}]]`;
+        }
+      }
+
+      if (pageName) {
+        attendeeLinks.push(pageName);
+      }
+    }
+
+    if (attendeeLinks.length > 0) {
+      // Remove duplicates
+      const uniqueLinks = Array.from(new Set(attendeeLinks));
+      children.push(createPropertyBlock(ICAL_ATTENDEES_PROPERTY, uniqueLinks.join(", ")));
+    }
   }
 
   // Add URL if present
