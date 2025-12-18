@@ -1,3 +1,15 @@
+# [1.2.0](https://github.com/avelino/roamresearch-ical/compare/v1.1.0...v1.2.0) (2025-12-18)
+
+
+### Bug Fixes
+
+* **ci:** regenerate package-lock on Linux to fix rollup binaries ([a50b2da](https://github.com/avelino/roamresearch-ical/commit/a50b2da6d8c33de8caf2dc78f05d4e46653f9165))
+
+
+### Features
+
+* add incremental sync, URL validation, expanded meeting services, and testing infrastructure ([751474d](https://github.com/avelino/roamresearch-ical/commit/751474dfe7198578ff1005255c11b39c8e31c869))
+
 # [1.1.0](https://github.com/avelino/roamresearch-ical/compare/v1.0.0...v1.1.0) (2025-12-14)
 
 
