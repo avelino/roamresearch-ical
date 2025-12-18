@@ -18,7 +18,7 @@
 - Lint command: `npm run lint`.
 - Test command: `npm test` (runs Vitest unit tests).
 - Check command: `npm run check` (runs lint + test + build in sequence).
-- Target Node versions: 20.x, 22.x (see CI workflow).
+- Target Node version: 20.x (see CI workflow).
 
 ## Code Structure Rules
 
@@ -199,5 +199,5 @@ The project uses Vitest for unit testing with the following structure:
 
 GitHub Actions workflow (`.github/workflows/ci.yml`) runs on push/PR to main:
 
-1. Tests on Node.js 20.x and 22.x
-2. Steps: checkout → setup node → npm ci → lint → test → build
+1. Tests on Node.js 20.x
+2. Steps: checkout → setup node → npm install → lint → test → build
