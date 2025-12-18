@@ -11,9 +11,171 @@ import {
   DEFAULT_SYNC_DAYS_FUTURE,
   DEFAULT_TITLE_PREFIX,
 } from "./constants";
-import { logWarn } from "./logger";
+import { logWarn, logDebug } from "./logger";
 import type { ExtensionAPI } from "./main";
 import type { CalendarConfig } from "./ical";
+
+/**
+ * Validation result for a calendar URL.
+ */
+export interface CalendarValidationResult {
+  url: string;
+  valid: boolean;
+  error?: string;
+  contentType?: string;
+  status?: number;
+}
+
+/**
+ * Validates if a string is a valid URL.
+ */
+export function isValidUrl(urlString: string): boolean {
+  try {
+    const url = new URL(urlString);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Gets the Roam CORS proxy URL.
+ */
+function getRoamProxyUrl(): string | undefined {
+  const roamAPI = (window as unknown as {
+    roamAlphaAPI?: {
+      constants?: {
+        corsAnywhereProxyUrl?: string;
+      };
+    };
+  }).roamAlphaAPI;
+
+  return roamAPI?.constants?.corsAnywhereProxyUrl;
+}
+
+/**
+ * Validates a calendar URL by checking format and optionally testing connectivity.
+ *
+ * @param url URL to validate.
+ * @param testConnection If true, attempts to fetch the URL to verify it's accessible.
+ */
+export async function validateCalendarUrl(
+  url: string,
+  testConnection = false
+): Promise<CalendarValidationResult> {
+  // Basic URL format validation
+  if (!url || url.trim() === "") {
+    return { url, valid: false, error: "URL is empty" };
+  }
+
+  const trimmedUrl = url.trim();
+
+  if (!isValidUrl(trimmedUrl)) {
+    return { url: trimmedUrl, valid: false, error: "Invalid URL format" };
+  }
+
+  // Check for common iCal URL patterns
+  const urlLower = trimmedUrl.toLowerCase();
+  const isICalUrl =
+    urlLower.endsWith(".ics") ||
+    urlLower.includes("/ical") ||
+    urlLower.includes("/calendar") ||
+    urlLower.includes("webcal://") ||
+    urlLower.includes("calendar.google.com") ||
+    urlLower.includes("outlook.office365.com") ||
+    urlLower.includes("caldav");
+
+  if (!isICalUrl) {
+    logDebug("url_validation_warning", {
+      url: trimmedUrl,
+      message: "URL does not appear to be an iCal feed",
+    });
+  }
+
+  if (!testConnection) {
+    return { url: trimmedUrl, valid: true };
+  }
+
+  // Test connectivity
+  try {
+    const proxyUrl = getRoamProxyUrl();
+    if (!proxyUrl) {
+      return {
+        url: trimmedUrl,
+        valid: true,
+        error: "Cannot test connection: Roam proxy not available",
+      };
+    }
+
+    const fetchUrl = `${proxyUrl}/${trimmedUrl}`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+
+    const response = await fetch(fetchUrl, {
+      method: "HEAD", // Use HEAD to avoid downloading full content
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    const contentType = response.headers.get("Content-Type") ?? undefined;
+    const isValidContentType =
+      !contentType ||
+      contentType.includes("text/calendar") ||
+      contentType.includes("text/plain") ||
+      contentType.includes("application/octet-stream");
+
+    if (!response.ok) {
+      return {
+        url: trimmedUrl,
+        valid: false,
+        error: `HTTP ${response.status}: ${response.statusText}`,
+        status: response.status,
+        contentType,
+      };
+    }
+
+    if (!isValidContentType) {
+      return {
+        url: trimmedUrl,
+        valid: false,
+        error: `Unexpected content type: ${contentType}`,
+        contentType,
+        status: response.status,
+      };
+    }
+
+    return {
+      url: trimmedUrl,
+      valid: true,
+      contentType,
+      status: response.status,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("abort")) {
+      return { url: trimmedUrl, valid: false, error: "Connection timeout (10s)" };
+    }
+    return { url: trimmedUrl, valid: false, error: `Connection failed: ${message}` };
+  }
+}
+
+/**
+ * Validates all calendar configurations.
+ */
+export async function validateAllCalendars(
+  calendars: CalendarConfig[],
+  testConnection = false
+): Promise<Map<string, CalendarValidationResult>> {
+  const results = new Map<string, CalendarValidationResult>();
+
+  for (const calendar of calendars) {
+    const result = await validateCalendarUrl(calendar.url, testConnection);
+    results.set(calendar.url, result);
+  }
+
+  return results;
+}
 
 /**
  * Roam basic node type for tree traversal.
@@ -371,7 +533,7 @@ function readSettingsFromPanel(
     1
   );
   const calendarsRaw = getString(allSettings, SETTINGS_KEYS.calendars) ?? "";
-  const calendars = parseCalendarsConfig(calendarsRaw);
+  const calendars = parseCalendarsConfigLegacy(calendarsRaw);
   const enableDebugLogs = getBoolean(
     allSettings,
     SETTINGS_KEYS.enableDebugLogs,
@@ -439,7 +601,7 @@ function readSettingsFromPage(pageUid: string): SettingsSnapshot {
     key: "Calendars",
     defaultValue: [],
   }).join("\n");
-  const calendars = parseCalendarsConfig(calendarsRaw);
+  const calendars = parseCalendarsConfigLegacy(calendarsRaw);
 
   const enableDebugLogs = hasFlag(tree, "Enable Debug Logs");
 
@@ -577,23 +739,38 @@ function parseAttendeeAliases(raw: string): Map<string, string> {
 }
 
 /**
+ * Result from parsing calendar configuration.
+ */
+export interface ParseCalendarsResult {
+  calendars: CalendarConfig[];
+  errors: { line: string; error: string }[];
+}
+
+/**
  * Parses calendar configuration from a multi-line string.
  * Format: name|url (one per line)
+ * Returns both valid calendars and parsing errors.
  */
-function parseCalendarsConfig(raw: string): CalendarConfig[] {
-  if (!raw) return [];
+export function parseCalendarsConfig(raw: string): ParseCalendarsResult {
+  if (!raw) return { calendars: [], errors: [] };
 
   const calendars: CalendarConfig[] = [];
+  const errors: { line: string; error: string }[] = [];
   const lines = raw.split(/\r?\n/);
 
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) continue;
 
+    // Skip comment lines
+    if (trimmed.startsWith("#") || trimmed.startsWith("//")) {
+      continue;
+    }
+
     const pipeIndex = trimmed.indexOf("|");
     if (pipeIndex === -1) {
       // Assume it's just a URL, use URL hostname as name
-      if (trimmed.startsWith("http")) {
+      if (isValidUrl(trimmed)) {
         try {
           const url = new URL(trimmed);
           calendars.push({
@@ -601,8 +778,12 @@ function parseCalendarsConfig(raw: string): CalendarConfig[] {
             url: trimmed,
           });
         } catch {
+          errors.push({ line: trimmed, error: "Invalid URL format" });
           logWarn("Invalid calendar URL", { url: trimmed });
         }
+      } else {
+        errors.push({ line: trimmed, error: "Invalid URL format (must start with http:// or https://)" });
+        logWarn("Invalid calendar URL format", { url: trimmed });
       }
       continue;
     }
@@ -610,14 +791,37 @@ function parseCalendarsConfig(raw: string): CalendarConfig[] {
     const name = trimmed.slice(0, pipeIndex).trim();
     const url = trimmed.slice(pipeIndex + 1).trim();
 
-    if (name && url && url.startsWith("http")) {
-      calendars.push({ name, url });
-    } else {
-      logWarn("Invalid calendar config line", { line: trimmed });
+    if (!name) {
+      errors.push({ line: trimmed, error: "Calendar name is empty" });
+      logWarn("Empty calendar name", { line: trimmed });
+      continue;
     }
+
+    if (!url) {
+      errors.push({ line: trimmed, error: "Calendar URL is empty" });
+      logWarn("Empty calendar URL", { line: trimmed });
+      continue;
+    }
+
+    if (!isValidUrl(url)) {
+      errors.push({ line: trimmed, error: "Invalid URL format (must start with http:// or https://)" });
+      logWarn("Invalid calendar URL format", { url });
+      continue;
+    }
+
+    calendars.push({ name, url });
   }
 
-  return calendars;
+  return { calendars, errors };
+}
+
+/**
+ * Legacy wrapper for backward compatibility.
+ * Returns only valid calendars, logging errors.
+ */
+function parseCalendarsConfigLegacy(raw: string): CalendarConfig[] {
+  const result = parseCalendarsConfig(raw);
+  return result.calendars;
 }
 
 /**
@@ -753,6 +957,156 @@ function registerSettingsPanel(extensionAPI: ExtensionAPI) {
       });
     };
 
+  /**
+   * Calendars TextArea with validation feedback.
+   */
+  const CalendarsTextArea = () => {
+    const getInitial = () =>
+      getString(extensionAPI.settings.getAll() ?? {}, SETTINGS_KEYS.calendars) ?? "";
+    const [value, setValue] = useState(getInitial());
+    const [validationErrors, setValidationErrors] = useState<{ line: string; error: string }[]>([]);
+    const [validCount, setValidCount] = useState(0);
+    const [isValidating, setIsValidating] = useState(false);
+    const [connectionResults, setConnectionResults] = useState<Map<string, CalendarValidationResult>>(new Map());
+
+    useEffect(() => {
+      setValue(getInitial());
+    }, []);
+
+    // Validate on value change
+    useEffect(() => {
+      const result = parseCalendarsConfig(value);
+      setValidationErrors(result.errors);
+      setValidCount(result.calendars.length);
+      // Clear connection results when calendars change
+      setConnectionResults(new Map());
+    }, [value]);
+
+    const testConnections = async () => {
+      setIsValidating(true);
+      const result = parseCalendarsConfig(value);
+      const results = await validateAllCalendars(result.calendars, true);
+      setConnectionResults(results);
+      setIsValidating(false);
+    };
+
+    return React.createElement(
+      "div",
+      { style: { display: "flex", flexDirection: "column", gap: "0.5rem" } },
+      // TextArea
+      React.createElement("textarea", {
+        placeholder: "Work|https://example.com/calendar.ics",
+        value,
+        style: {
+          width: "100%",
+          minHeight: "8rem",
+          fontFamily: "monospace",
+          borderColor: validationErrors.length > 0 ? "#e53e3e" : undefined,
+        },
+        onChange: (event: { target: { value: string } }) => {
+          const next = event.target.value;
+          setValue(next);
+          void extensionAPI.settings.set(SETTINGS_KEYS.calendars, next);
+        },
+      }),
+      // Validation status
+      React.createElement(
+        "div",
+        { style: { fontSize: "0.85rem", color: "#666" } },
+        validCount > 0
+          ? `${validCount} calendar(s) configured`
+          : "No calendars configured"
+      ),
+      // Validation errors
+      validationErrors.length > 0 &&
+        React.createElement(
+          "div",
+          {
+            style: {
+              fontSize: "0.85rem",
+              color: "#e53e3e",
+              backgroundColor: "#fff5f5",
+              padding: "0.5rem",
+              borderRadius: "4px",
+              border: "1px solid #feb2b2",
+            },
+          },
+          validationErrors.map((err, i) =>
+            React.createElement(
+              "div",
+              { key: i },
+              `Line "${err.line.substring(0, 30)}${err.line.length > 30 ? "..." : ""}": ${err.error}`
+            )
+          )
+        ),
+      // Test connection button
+      validCount > 0 &&
+        React.createElement(
+          "button",
+          {
+            onClick: testConnections,
+            disabled: isValidating,
+            style: {
+              padding: "0.5rem 1rem",
+              cursor: isValidating ? "wait" : "pointer",
+              backgroundColor: "#4299e1",
+              color: "white",
+              border: "none",
+              borderRadius: "4px",
+              fontSize: "0.85rem",
+            },
+          },
+          isValidating ? "Testing..." : "Test Connections"
+        ),
+      // Connection test results
+      connectionResults.size > 0 &&
+        React.createElement(
+          "div",
+          {
+            style: {
+              fontSize: "0.85rem",
+              padding: "0.5rem",
+              borderRadius: "4px",
+              border: "1px solid #e2e8f0",
+            },
+          },
+          Array.from(connectionResults.entries()).map(([url, result]) =>
+            React.createElement(
+              "div",
+              {
+                key: url,
+                style: {
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.5rem",
+                  padding: "0.25rem 0",
+                },
+              },
+              React.createElement("span", {
+                style: {
+                  width: "8px",
+                  height: "8px",
+                  borderRadius: "50%",
+                  backgroundColor: result.valid ? "#48bb78" : "#e53e3e",
+                },
+              }),
+              React.createElement(
+                "span",
+                { style: { flex: 1, overflow: "hidden", textOverflow: "ellipsis" } },
+                url.substring(0, 50) + (url.length > 50 ? "..." : "")
+              ),
+              !result.valid &&
+                React.createElement(
+                  "span",
+                  { style: { color: "#e53e3e" } },
+                  result.error
+                )
+            )
+          )
+        )
+    );
+  };
+
   const Toggle = (key: string) =>
     function ToggleComponent() {
       const getInitial = () =>
@@ -803,10 +1157,10 @@ function registerSettingsPanel(extensionAPI: ExtensionAPI) {
         id: SETTINGS_KEYS.calendars,
         name: "Calendars",
         description:
-          "Add your iCal (.ics) URLs. Format: name|url (one per line). Example:\nWork|https://calendar.google.com/calendar/ical/work%40gmail.com/public/basic.ics",
+          "Add your iCal (.ics) URLs. Format: name|url (one per line). Lines starting with # or // are comments. Example:\nWork|https://calendar.google.com/calendar/ical/work%40gmail.com/public/basic.ics",
         action: {
           type: "reactComponent",
-          component: TextArea(SETTINGS_KEYS.calendars, "Work|https://example.com/calendar.ics"),
+          component: CalendarsTextArea,
         },
       },
       {

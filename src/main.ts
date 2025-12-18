@@ -1,7 +1,13 @@
 import "./polyfills";
 
 import { writeBlocks } from "./blocks";
-import { fetchAllCalendars, filterEventsByDateRange, type ICalCalendar } from "./ical";
+import {
+  fetchAllCalendars,
+  filterEventsByDateRange,
+  clearCalendarCache,
+  type ICalCalendar,
+  type ICalCalendarResult,
+} from "./ical";
 import {
   initializeSettings,
   readSettings,
@@ -146,9 +152,9 @@ function maybeRescheduleAutoSync(snapshot: SettingsSnapshot) {
   lastCalendarCount = calendarCount;
 }
 
-async function syncCalendars(trigger: "manual" | "auto") {
+async function syncCalendars(trigger: "manual" | "auto" | "force") {
   if (syncInProgress) {
-    if (trigger === "manual") {
+    if (trigger === "manual" || trigger === "force") {
       showStatusMessage("Sync is already in progress.", "warning");
     }
     return;
@@ -157,7 +163,7 @@ async function syncCalendars(trigger: "manual" | "auto") {
   const settings = refreshSettings();
 
   if (settings.calendars.length === 0) {
-    if (trigger === "manual") {
+    if (trigger === "manual" || trigger === "force") {
       showStatusMessage(
         "Please add calendar URLs in extension settings (Roam Depot → Extension Settings → iCal Sync).",
         "warning"
@@ -166,8 +172,14 @@ async function syncCalendars(trigger: "manual" | "auto") {
     return;
   }
 
+  // Force refresh clears the cache first
+  const forceRefresh = trigger === "force";
+  if (forceRefresh) {
+    clearCalendarCache();
+  }
+
   syncInProgress = true;
-  if (trigger === "manual") {
+  if (trigger === "manual" || trigger === "force") {
     showStatusMessage(`Syncing ${settings.calendars.length} calendar(s)...`, "info");
   }
 
@@ -177,10 +189,21 @@ async function syncCalendars(trigger: "manual" | "auto") {
       calendars: settings.calendars.map(c => c.name),
       syncDaysPast: settings.syncDaysPast,
       syncDaysFuture: settings.syncDaysFuture,
+      forceRefresh,
     });
 
-    const rawCalendars: ICalCalendar[] = await fetchAllCalendars(settings.calendars);
+    const fetchResult = await fetchAllCalendars(settings.calendars, forceRefresh);
+    const rawCalendars: ICalCalendarResult[] = fetchResult.calendars;
     const totalRawEvents = rawCalendars.reduce((sum, cal) => sum + cal.events.length, 0);
+
+    // Check if any calendar changed
+    const anyChanged = rawCalendars.some(cal => cal.changed);
+
+    // For auto sync, skip writing if nothing changed
+    if (trigger === "auto" && !anyChanged && fetchResult.stats.cached === fetchResult.stats.total) {
+      logInfo(`Auto sync skipped: all ${fetchResult.stats.total} calendars unchanged`);
+      return;
+    }
 
     // Filter events by date range (async to yield during filtering)
     const dateRangeConfig = {
@@ -203,10 +226,11 @@ async function syncCalendars(trigger: "manual" | "auto") {
       totalRawEvents,
       totalEventsAfterDateFilter: totalEvents,
       filteredOut: totalRawEvents - totalEvents,
+      stats: fetchResult.stats,
     });
 
     if (calendars.length === 0) {
-      if (trigger === "manual") {
+      if (trigger === "manual" || trigger === "force") {
         showStatusMessage("No calendars could be loaded. Check your URLs.", "warning");
       }
       return;
@@ -224,13 +248,17 @@ async function syncCalendars(trigger: "manual" | "auto") {
       }
     );
 
-    if (trigger === "manual") {
-      showStatusMessage(
-        `Synced ${totalEvents} event(s) from ${calendars.length} calendar(s).`,
-        "success"
-      );
+    // Build status message with incremental sync info
+    const statusParts: string[] = [];
+    statusParts.push(`${totalEvents} event(s) from ${calendars.length} calendar(s)`);
+    if (fetchResult.stats.cached > 0) {
+      statusParts.push(`(${fetchResult.stats.cached} cached)`);
+    }
+
+    if (trigger === "manual" || trigger === "force") {
+      showStatusMessage(`Synced ${statusParts.join(" ")}`, "success");
     } else {
-      logInfo(`Automatic sync completed: ${totalEvents} events from ${calendars.length} calendars`);
+      logInfo(`Automatic sync completed: ${statusParts.join(" ")}`);
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

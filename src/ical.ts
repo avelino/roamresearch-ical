@@ -1,5 +1,58 @@
 import ICAL from "ical.js";
-import { logDebug, logError } from "./logger";
+import { logDebug, logError, logInfo } from "./logger";
+
+/**
+ * Cache entry for incremental sync.
+ * Stores ETag, Last-Modified headers, and content hash to avoid re-downloading unchanged calendars.
+ */
+export interface CalendarCacheEntry {
+  url: string;
+  etag?: string;
+  lastModified?: string;
+  contentHash: string;
+  lastFetched: number;
+}
+
+/**
+ * In-memory cache for calendar data.
+ * Persisted per session to enable incremental sync.
+ */
+const calendarCache = new Map<string, CalendarCacheEntry>();
+
+/**
+ * Clears the calendar cache.
+ * Call this when the user forces a full refresh.
+ */
+export function clearCalendarCache(): void {
+  calendarCache.clear();
+  logDebug("cache_cleared", { message: "Calendar cache cleared" });
+}
+
+/**
+ * Gets cache statistics for debugging.
+ */
+export function getCacheStats(): { size: number; entries: string[] } {
+  return {
+    size: calendarCache.size,
+    entries: Array.from(calendarCache.keys()),
+  };
+}
+
+/**
+ * Simple hash function for content comparison (FNV-1a).
+ * Used to detect if calendar content has changed.
+ */
+function hashContent(content: string): string {
+  const FNV_PRIME = 0x01000193;
+  const FNV_OFFSET = 0x811c9dc5;
+
+  let hash = FNV_OFFSET;
+  for (let i = 0; i < content.length; i++) {
+    hash ^= content.charCodeAt(i);
+    hash = Math.imul(hash, FNV_PRIME);
+  }
+  return (hash >>> 0).toString(36);
+}
 
 /**
  * Yields control back to the main thread to prevent UI freezing.
@@ -55,29 +108,150 @@ export interface ICalEvent {
 }
 
 /**
- * Extracts video conference URLs (Zoom, Meet, Teams, etc.) from text.
+ * Meeting service patterns for video conference URL detection.
+ * Each pattern includes the service name for logging/debugging.
+ */
+const MEETING_URL_PATTERNS: { name: string; pattern: RegExp }[] = [
+  // Zoom: matches /j/, /my/, /s/ (webinar), and /wc/ links
+  {
+    name: "Zoom",
+    pattern: /https:\/\/(?:[\w-]+\.)?zoom\.us\/(?:j|my|s|wc)\/[a-zA-Z0-9]+(?:\?[a-zA-Z0-9=&_-]+)?/i,
+  },
+  // Google Meet: matches standard meet.google.com patterns
+  {
+    name: "Google Meet",
+    pattern: /https:\/\/meet\.google\.com\/[a-z]{3}-[a-z]{4}-[a-z]{3}/i,
+  },
+  // Microsoft Teams: matches meetup-join and meeting links
+  {
+    name: "Microsoft Teams",
+    pattern: /https:\/\/teams\.(?:microsoft|live)\.com\/(?:l\/meetup-join|meet)\/[a-zA-Z0-9%._/-]+/i,
+  },
+  // Webex: matches standard join links and personal room links
+  {
+    name: "Webex",
+    pattern: /https:\/\/(?:[\w-]+\.)?webex\.com\/(?:meet|join|m|wbxmjs)\/[a-zA-Z0-9./_-]+/i,
+  },
+  // GoToMeeting
+  {
+    name: "GoToMeeting",
+    pattern: /https:\/\/(?:global\.gotomeeting\.com\/join|gotomeet\.me)\/[0-9]+/i,
+  },
+  // Whereby (formerly appear.in)
+  {
+    name: "Whereby",
+    pattern: /https:\/\/whereby\.com\/[a-zA-Z0-9_-]+/i,
+  },
+  // Jitsi Meet (including self-hosted instances)
+  {
+    name: "Jitsi",
+    pattern: /https:\/\/(?:meet\.jit\.si|8x8\.vc|[\w-]+\.jitsi\.net)\/[a-zA-Z0-9_-]+/i,
+  },
+  // Discord (voice channel invites)
+  {
+    name: "Discord",
+    pattern: /https:\/\/discord\.(?:gg|com\/invite)\/[a-zA-Z0-9]+/i,
+  },
+  // Slack Huddles
+  {
+    name: "Slack",
+    pattern: /https:\/\/[\w-]+\.slack\.com\/(?:huddle|call)\/[a-zA-Z0-9./_-]+/i,
+  },
+  // Amazon Chime
+  {
+    name: "Amazon Chime",
+    pattern: /https:\/\/(?:chime\.aws|app\.chime\.aws)\/meetings\/[a-zA-Z0-9-]+/i,
+  },
+  // BlueJeans
+  {
+    name: "BlueJeans",
+    pattern: /https:\/\/(?:[\w-]+\.)?bluejeans\.com\/[0-9]+(?:\/[a-zA-Z0-9]+)?/i,
+  },
+  // RingCentral
+  {
+    name: "RingCentral",
+    pattern: /https:\/\/(?:[\w-]+\.)?ringcentral\.com\/(?:j|join)\/[0-9]+/i,
+  },
+  // Loom (video messages with optional meeting context)
+  {
+    name: "Loom",
+    pattern: /https:\/\/www\.loom\.com\/share\/[a-zA-Z0-9]+/i,
+  },
+  // Around
+  {
+    name: "Around",
+    pattern: /https:\/\/meet\.around\.co\/r\/[a-zA-Z0-9_-]+/i,
+  },
+  // Skype
+  {
+    name: "Skype",
+    pattern: /https:\/\/(?:join\.skype\.com|meet\.lync\.com)\/[a-zA-Z0-9./_-]+/i,
+  },
+  // Gather.town
+  {
+    name: "Gather",
+    pattern: /https:\/\/(?:gather\.town|app\.gather\.town)\/app\/[a-zA-Z0-9./_-]+/i,
+  },
+  // Tuple (pair programming)
+  {
+    name: "Tuple",
+    pattern: /https:\/\/tuple\.app\/[a-zA-Z0-9./_-]+/i,
+  },
+  // Pop (screen sharing)
+  {
+    name: "Pop",
+    pattern: /https:\/\/pop\.com\/[a-zA-Z0-9_-]+/i,
+  },
+  // Riverside.fm (podcast recording)
+  {
+    name: "Riverside",
+    pattern: /https:\/\/riverside\.fm\/studio\/[a-zA-Z0-9_-]+/i,
+  },
+  // Streamyard
+  {
+    name: "StreamYard",
+    pattern: /https:\/\/streamyard\.com\/[a-zA-Z0-9]+/i,
+  },
+];
+
+/**
+ * Extracts video conference URLs from text.
+ * Supports: Zoom, Google Meet, Microsoft Teams, Webex, GoToMeeting,
+ * Whereby, Jitsi, Discord, Slack Huddles, Amazon Chime, BlueJeans,
+ * RingCentral, Loom, Around, Skype, Gather, Tuple, Pop, Riverside, StreamYard.
+ *
+ * @param text Text to search for meeting URLs.
+ * @returns First matching meeting URL found, or undefined.
  */
 export function extractMeetingUrl(text: string | null | undefined): string | undefined {
   if (!text) return undefined;
 
-  // Regex patterns for common video conference services
-  const patterns = [
-    // Zoom: matches /j/ and /my/ links, optionally with password
-    /https:\/\/(?:[\w-]+\.)?zoom\.us\/(?:j|my)\/[a-zA-Z0-9]+(?:\?pwd=[a-zA-Z0-9]+)?/i,
-    // Google Meet: matches standard meet.google.com patterns
-    /https:\/\/meet\.google\.com\/[a-z]{3}-[a-z]{4}-[a-z]{3}/i,
-    // Microsoft Teams: matches meetup-join links
-    /https:\/\/teams\.microsoft\.com\/l\/meetup-join\/[a-zA-Z0-9%._-]+/i,
-    // Webex: matches standard join links
-    /https:\/\/(?:[\w-]+\.)?webex\.com\/(?:meet|join|m)\/[a-zA-Z0-9]+/i,
-    // GoToMeeting
-    /https:\/\/global\.gotomeeting\.com\/join\/[0-9]+/i,
-  ];
-
-  for (const pattern of patterns) {
+  for (const { pattern } of MEETING_URL_PATTERNS) {
     const match = text.match(pattern);
     if (match) {
       return match[0];
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Extracts meeting URL with service name identification.
+ * Useful for logging and debugging.
+ *
+ * @param text Text to search for meeting URLs.
+ * @returns Object with URL and service name, or undefined.
+ */
+export function extractMeetingUrlWithService(
+  text: string | null | undefined
+): { url: string; service: string } | undefined {
+  if (!text) return undefined;
+
+  for (const { name, pattern } of MEETING_URL_PATTERNS) {
+    const match = text.match(pattern);
+    if (match) {
+      return { url: match[0], service: name };
     }
   }
 
@@ -278,23 +452,70 @@ function buildProxiedUrl(targetUrl: string): string {
 }
 
 /**
- * Fetches content through Roam's native CORS proxy.
+ * Result from an incremental fetch operation.
+ */
+export interface IncrementalFetchResult {
+  content: string;
+  changed: boolean;
+  cached: boolean;
+  etag?: string;
+  lastModified?: string;
+}
+
+/**
+ * Fetches content through Roam's native CORS proxy with incremental sync support.
+ * Uses ETag/Last-Modified headers and content hashing to detect changes.
  * Yields to main thread before and after fetch to prevent UI freezing.
  *
  * @param url Original URL to fetch.
+ * @param forceRefresh If true, ignores cache and fetches fresh content.
  */
-async function fetchWithCorsProxy(url: string): Promise<string> {
+async function fetchWithCorsProxy(url: string, forceRefresh = false): Promise<IncrementalFetchResult> {
   const proxyUrl = buildProxiedUrl(url);
+  const cacheEntry = calendarCache.get(url);
 
-  logDebug("fetch_with_proxy", { originalUrl: url, proxyUrl });
+  logDebug("fetch_with_proxy", {
+    originalUrl: url,
+    proxyUrl,
+    hasCacheEntry: !!cacheEntry,
+    forceRefresh,
+  });
 
   // Yield before fetch to ensure UI is responsive
   await yieldToMain();
 
-  const response = await fetch(proxyUrl);
+  // Build request headers for conditional fetch
+  const headers: HeadersInit = {};
+  if (!forceRefresh && cacheEntry) {
+    if (cacheEntry.etag) {
+      headers["If-None-Match"] = cacheEntry.etag;
+    }
+    if (cacheEntry.lastModified) {
+      headers["If-Modified-Since"] = cacheEntry.lastModified;
+    }
+  }
+
+  const response = await fetch(proxyUrl, { headers });
 
   // Yield after fetch completes
   await yieldToMain();
+
+  // Handle 304 Not Modified - content hasn't changed
+  if (response.status === 304 && cacheEntry) {
+    logInfo(`Calendar unchanged (304): ${url}`);
+
+    // Update last fetched time
+    cacheEntry.lastFetched = Date.now();
+    calendarCache.set(url, cacheEntry);
+
+    return {
+      content: "", // Empty content signals no change
+      changed: false,
+      cached: true,
+      etag: cacheEntry.etag,
+      lastModified: cacheEntry.lastModified,
+    };
+  }
 
   if (!response.ok) {
     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -305,36 +526,114 @@ async function fetchWithCorsProxy(url: string): Promise<string> {
   // Yield after reading response body
   await yieldToMain();
 
-  return text;
+  // Extract caching headers
+  const etag = response.headers.get("ETag") ?? undefined;
+  const lastModified = response.headers.get("Last-Modified") ?? undefined;
+  const contentHash = hashContent(text);
+
+  // Check if content actually changed (even if server doesn't support conditional requests)
+  const contentChanged = !cacheEntry || cacheEntry.contentHash !== contentHash;
+
+  if (!contentChanged) {
+    logInfo(`Calendar unchanged (hash match): ${url}`);
+  } else {
+    logDebug("content_changed", {
+      url,
+      oldHash: cacheEntry?.contentHash,
+      newHash: contentHash,
+    });
+  }
+
+  // Update cache
+  calendarCache.set(url, {
+    url,
+    etag,
+    lastModified,
+    contentHash,
+    lastFetched: Date.now(),
+  });
+
+  return {
+    content: text,
+    changed: contentChanged,
+    cached: false,
+    etag,
+    lastModified,
+  };
 }
+
+/**
+ * Result from fetching an iCal calendar with incremental sync info.
+ */
+export interface ICalCalendarResult extends ICalCalendar {
+  /** Whether the calendar content changed since last fetch */
+  changed: boolean;
+  /** Whether the result came from cache (304 Not Modified) */
+  cached: boolean;
+}
+
+/**
+ * Stored events cache for calendars that haven't changed.
+ * Used to return previous events when content hasn't changed.
+ */
+const eventsCache = new Map<string, ICalEvent[]>();
 
 /**
  * Fetches and parses an iCal feed from a URL.
  * Uses Roam's native CORS proxy (roamAlphaAPI.constants.corsAnywhereProxyUrl).
+ * Supports incremental sync by detecting unchanged content.
  * Yields to main thread to prevent UI freezing.
  *
  * @param config Calendar configuration with name and URL.
+ * @param forceRefresh If true, ignores cache and fetches fresh content.
  */
-export async function fetchICalCalendar(config: CalendarConfig): Promise<ICalCalendar> {
-  logDebug("fetch_ical_start", { name: config.name, url: config.url });
+export async function fetchICalCalendar(
+  config: CalendarConfig,
+  forceRefresh = false
+): Promise<ICalCalendarResult> {
+  logDebug("fetch_ical_start", { name: config.name, url: config.url, forceRefresh });
 
   try {
-    const content = await fetchWithCorsProxy(config.url);
+    const fetchResult = await fetchWithCorsProxy(config.url, forceRefresh);
+
+    // If content hasn't changed, return cached events
+    if (!fetchResult.changed) {
+      const cachedEvents = eventsCache.get(config.url) ?? [];
+      logDebug("fetch_ical_cached", {
+        name: config.name,
+        eventsCount: cachedEvents.length,
+        cached: fetchResult.cached,
+      });
+
+      return {
+        name: config.name,
+        url: config.url,
+        events: cachedEvents,
+        changed: false,
+        cached: fetchResult.cached,
+      };
+    }
 
     // Yield before parsing
     await yieldToMain();
 
-    const events = await parseICalContent(content, config.name);
+    const events = await parseICalContent(fetchResult.content, config.name);
+
+    // Cache the parsed events
+    eventsCache.set(config.url, events);
 
     logDebug("fetch_ical_complete", {
       name: config.name,
       eventsCount: events.length,
+      changed: true,
     });
 
     return {
       name: config.name,
       url: config.url,
       events,
+      changed: true,
+      cached: false,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -344,18 +643,42 @@ export async function fetchICalCalendar(config: CalendarConfig): Promise<ICalCal
 }
 
 /**
+ * Result from fetching all calendars with sync statistics.
+ */
+export interface FetchAllResult {
+  calendars: ICalCalendarResult[];
+  stats: {
+    total: number;
+    changed: number;
+    cached: number;
+    failed: number;
+  };
+}
+
+/**
  * Fetches multiple iCal calendars sequentially with yields between each.
  * Sequential processing prevents UI freezing when parsing multiple large calendars.
  * Uses Roam's native CORS proxy (roamAlphaAPI.constants.corsAnywhereProxyUrl).
+ * Supports incremental sync by tracking which calendars have changed.
  *
  * @param configs Array of calendar configurations.
+ * @param forceRefresh If true, ignores cache and fetches fresh content for all calendars.
  */
-export async function fetchAllCalendars(configs: CalendarConfig[]): Promise<ICalCalendar[]> {
+export async function fetchAllCalendars(
+  configs: CalendarConfig[],
+  forceRefresh = false
+): Promise<FetchAllResult> {
   if (configs.length === 0) {
-    return [];
+    return {
+      calendars: [],
+      stats: { total: 0, changed: 0, cached: 0, failed: 0 },
+    };
   }
 
-  const calendars: ICalCalendar[] = [];
+  const calendars: ICalCalendarResult[] = [];
+  let changed = 0;
+  let cached = 0;
+  let failed = 0;
 
   // Process calendars sequentially to prevent UI blocking
   // Each calendar fetch/parse already yields internally
@@ -363,18 +686,35 @@ export async function fetchAllCalendars(configs: CalendarConfig[]): Promise<ICal
     const config = configs[i];
 
     try {
-      const calendar = await fetchICalCalendar(config);
+      const calendar = await fetchICalCalendar(config, forceRefresh);
       calendars.push(calendar);
+
+      if (calendar.changed) {
+        changed++;
+      }
+      if (calendar.cached) {
+        cached++;
+      }
 
       // Yield between calendars to ensure UI responsiveness
       await yieldToMain();
     } catch (error) {
       logError(`Calendar fetch failed: ${config.name}`, error);
+      failed++;
       // Continue with next calendar on error
     }
   }
 
-  return calendars;
+  const stats = {
+    total: configs.length,
+    changed,
+    cached,
+    failed,
+  };
+
+  logDebug("fetch_all_complete", stats);
+
+  return { calendars, stats };
 }
 
 /**

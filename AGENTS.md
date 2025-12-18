@@ -12,12 +12,13 @@
 
 ## Environment & Tooling
 
-- Package manager: npm (CI uses `./build.sh`); lockfile `pnpm-lock.yaml` for local development with pnpm.
-- Install deps before running scripts: `npm install` or `npx pnpm install`.
-- Build command: `./build.sh` or `npm run build` (runs `tsc` then `vite build` producing `extension.js` in project root).
-- Lint command: `npx pnpm exec eslint ./src --ext .ts`.
-- Check command: `npx pnpm check` (runs lint + build in sequence).
-- Target Node version matches CI (`actions/setup-node@v3`) using Node 20.8+.
+- Package manager: npm with `package-lock.json`.
+- Install deps: `npm install` (or `npm ci` for CI environments).
+- Build command: `npm run build` (runs `tsc` then `vite build` producing `extension.js` in project root).
+- Lint command: `npm run lint`.
+- Test command: `npm test` (runs Vitest unit tests).
+- Check command: `npm run check` (runs lint + test + build in sequence).
+- Target Node versions: 20.x, 22.x (see CI workflow).
 
 ## Code Structure Rules
 
@@ -44,8 +45,8 @@
 ### ical.ts
 
 - `parseICalContent`: Parses raw .ics file content into `ICalEvent[]`.
-- `fetchICalCalendar`: Fetches and parses a single calendar URL. Uses Roam's native CORS proxy.
-- `fetchAllCalendars`: Fetches multiple calendars sequentially. Uses Roam's native CORS proxy (`roamAlphaAPI.constants.corsAnywhereProxyUrl`).
+- `fetchICalCalendar`: Fetches and parses a single calendar URL. Uses Roam's native CORS proxy. Supports incremental sync with caching.
+- `fetchAllCalendars`: Fetches multiple calendars with incremental sync support. Returns `FetchAllResult` with stats on changed/cached/failed calendars.
 - `formatRoamDate`: Converts Date to Roam format (e.g., "January 2nd, 2025").
 - `safeText`: Sanitizes text for block content.
 - `sanitizeEventId`: Creates safe event IDs for page names.
@@ -54,6 +55,26 @@
 - `filterExcludedEvents`: Filters out events whose titles match exclude patterns.
 - `isEventInDateRange`: Checks if an event falls within the configured sync window.
 - `filterEventsByDateRange`: Filters events to only include those within the sync window (days past/future).
+- `clearCalendarCache`: Clears the incremental sync cache (used for force sync).
+- `extractVideoConferenceUrl`: Extracts video conference URLs from event location/description. Supports 20+ services.
+
+#### Incremental Sync
+
+The module implements an incremental sync system to avoid re-downloading unchanged calendars:
+
+- **Cache System**: `CalendarCacheEntry` stores URL, ETag, Last-Modified header, content hash, and last fetch timestamp.
+- **HTTP Caching**: Uses `If-None-Match` and `If-Modified-Since` headers for conditional requests.
+- **Content Hashing**: FNV-1a hash of calendar content for change detection when HTTP caching is unavailable.
+- **Force Sync**: Calling `clearCalendarCache()` forces a full re-download of all calendars.
+
+#### Supported Video Conference Services
+
+The `extractVideoConferenceUrl` function detects URLs for:
+- Zoom, Google Meet, Microsoft Teams, Webex
+- Whereby, Jitsi, Discord, Slack Huddles
+- Amazon Chime, BlueJeans, RingCentral
+- Loom, Around, Skype, Gather
+- Tuple, Pop, Riverside, StreamYard
 
 ### blocks.ts
 
@@ -68,8 +89,20 @@
 - Roam API wrappers: `getBasicTreeByParentUid`, `getPageUidByPageTitle`, `createPage`, `createBlock`, etc.
 - `initializeSettings`: Detects settings panel support; registers panel or creates config page.
 - `readSettings`: Returns `SettingsSnapshot` from panel or page-based config.
-- `parseCalendarsConfig`: Parses calendar URL list from settings (format: `name|url`).
+- `parseCalendarsConfig`: Parses calendar URL list from settings (format: `name|url`). Returns validation results.
+- `isValidUrl`: Validates URL format.
+- `validateCalendarUrl`: Validates a single calendar URL with optional connection test.
+- `validateAllCalendars`: Validates all configured calendars.
 - Settings keys: `page_prefix`, `sync_interval_minutes`, `calendars`, `enable_debug_logs`, `batch_size`, `batch_delay_ms`, `exclude_title_patterns`, `sync_days_past`, `sync_days_future`, `title_prefix`.
+
+#### URL Validation
+
+The module provides calendar URL validation with visual feedback:
+
+- **Format Validation**: Checks URL syntax, requires HTTPS protocol, validates .ics extension or webcal scheme.
+- **Connection Testing**: Optional test that fetches the URL to verify accessibility and content type.
+- **React Component**: `CalendarsTextArea` component with visual validation indicators and "Test Connections" button.
+- **Validation States**: Shows green checkmarks for valid URLs, red X for invalid, with error messages.
 
 ### scheduler.ts
 
@@ -143,6 +176,28 @@ To prevent UI freezing with large calendars:
 
 ## Quality Gates
 
-- Run `npm install` or `npx pnpm install` when dependencies change.
-- Run `npx pnpm exec eslint ./src --ext .ts`.
-- Run `./build.sh` or `npm run build` to ensure type-checking and bundling succeed.
+- Run `npm install` when dependencies change.
+- Run `npm run lint` to check code style.
+- Run `npm test` to run unit tests (93 tests covering ical.ts and settings.ts).
+- Run `npm run build` to ensure type-checking and bundling succeed.
+- Run `npm run check` to run all checks (lint + test + build) in sequence.
+
+## Testing
+
+The project uses Vitest for unit testing with the following structure:
+
+- **Test files**: `tests/*.test.ts` (also supports `src/**/*.test.ts`)
+- **Configuration**: `vitest.config.ts` with `tsconfig.test.json`
+- **Coverage**: v8 provider with 70% threshold for statements, branches, functions, and lines
+
+### Test Suites
+
+- **tests/ical.test.ts** (63 tests): Tests for iCal parsing, date formatting, event filtering, video conference URL extraction, and incremental sync cache.
+- **tests/settings.test.ts** (30 tests): Tests for URL validation, calendar config parsing, and settings utilities.
+
+## CI/CD
+
+GitHub Actions workflow (`.github/workflows/ci.yml`) runs on push/PR to main:
+
+1. Tests on Node.js 20.x and 22.x
+2. Steps: checkout → setup node → npm ci → lint → test → build
