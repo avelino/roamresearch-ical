@@ -227,7 +227,15 @@ export function registerSettingsPanel(extensionAPI: ExtensionAPI): void {
         type,
         placeholder,
         value,
-        style: { width: "100%" },
+        style: {
+          width: "100%",
+          padding: "8px 12px",
+          fontSize: "14px",
+          border: "1px solid #ccc",
+          borderRadius: "4px",
+          backgroundColor: "#fff",
+          color: "#333",
+        },
         onChange: (event: { target: { value: string } }) => {
           const next = event.target.value;
           setValue(next);
@@ -250,7 +258,18 @@ export function registerSettingsPanel(extensionAPI: ExtensionAPI): void {
       return React.createElement("textarea", {
         placeholder,
         value,
-        style: { width: "100%", minHeight: "8rem", fontFamily: "monospace" },
+        style: {
+          width: "100%",
+          minHeight: "120px",
+          padding: "8px 12px",
+          fontSize: "13px",
+          fontFamily: "monospace",
+          border: "1px solid #ccc",
+          borderRadius: "4px",
+          backgroundColor: "#fff",
+          color: "#333",
+          resize: "vertical",
+        },
         onChange: (event: { target: { value: string } }) => {
           const next = event.target.value;
           setValue(next);
@@ -294,16 +313,26 @@ export function registerSettingsPanel(extensionAPI: ExtensionAPI): void {
 
     return React.createElement(
       "div",
-      { style: { display: "flex", flexDirection: "column", gap: "0.5rem" } },
+      { style: { display: "flex", flexDirection: "column", gap: "8px" } },
       // TextArea
       React.createElement("textarea", {
-        placeholder: "Work|https://example.com/calendar.ics",
+        placeholder: "Work|https://calendar.google.com/xxx.ics\nPersonal|https://example.com/feed.ics",
         value,
         style: {
-          width: "100%",
-          minHeight: "8rem",
+          width: "500px",
+          maxWidth: "100%",
+          minHeight: "280px",
+          padding: "10px 12px",
+          fontSize: "12px",
           fontFamily: "monospace",
-          borderColor: validationErrors.length > 0 ? "#e53e3e" : undefined,
+          lineHeight: "1.6",
+          border: validationErrors.length > 0 ? "2px solid #e53e3e" : "1px solid #ccc",
+          borderRadius: "4px",
+          backgroundColor: "#fff",
+          color: "#333",
+          resize: "both",
+          boxSizing: "border-box",
+          wordBreak: "break-all",
         },
         onChange: (event: { target: { value: string } }) => {
           const next = event.target.value;
@@ -448,7 +477,16 @@ export function registerSettingsPanel(extensionAPI: ExtensionAPI): void {
         "select",
         {
           value,
-          style: { padding: "0.25rem 0.5rem", minWidth: "150px" },
+          style: {
+            padding: "8px 12px",
+            fontSize: "14px",
+            minWidth: "180px",
+            border: "1px solid #ccc",
+            borderRadius: "4px",
+            backgroundColor: "#fff",
+            color: "#333",
+            cursor: "pointer",
+          },
           onChange: (event: { target: { value: string } }) => {
             const next = event.target.value;
             setValue(next);
@@ -487,7 +525,7 @@ export function registerSettingsPanel(extensionAPI: ExtensionAPI): void {
         id: SETTINGS_KEYS.calendars,
         name: "Calendars",
         description:
-          "Add your iCal (.ics) URLs. Format: name|url (one per line). Lines starting with # or // are comments. Example:\nWork|https://calendar.google.com/calendar/ical/work%40gmail.com/public/basic.ics",
+          "Add your iCal (.ics) URLs. Format: name|url (one per line). Lines starting with # are comments.",
         action: {
           type: "reactComponent",
           component: CalendarsTextArea,
