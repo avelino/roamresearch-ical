@@ -179,12 +179,15 @@ async function syncCalendars(trigger: "manual" | "auto" | "force") {
   }
 
   syncInProgress = true;
+  const syncStartTime = performance.now();
+
   if (trigger === "manual" || trigger === "force") {
     showStatusMessage(`Syncing ${settings.calendars.length} calendar(s)...`, "info");
   }
 
   try {
     logDebug("sync_start", {
+      trigger,
       calendarCount: settings.calendars.length,
       calendars: settings.calendars.map(c => c.name),
       syncDaysPast: settings.syncDaysPast,
@@ -248,12 +251,30 @@ async function syncCalendars(trigger: "manual" | "auto" | "force") {
       }
     );
 
+    // Calculate sync metrics
+    const syncDurationMs = Math.round(performance.now() - syncStartTime);
+    const eventsPerSecond = syncDurationMs > 0 ? Math.round((totalEvents / syncDurationMs) * 1000) : 0;
+
+    // Log detailed metrics for debugging
+    logDebug("sync_complete", {
+      trigger,
+      durationMs: syncDurationMs,
+      totalEvents,
+      eventsPerSecond,
+      calendarsTotal: fetchResult.stats.total,
+      calendarsCached: fetchResult.stats.cached,
+      calendarsChanged: fetchResult.stats.changed,
+      calendarsFailed: fetchResult.stats.failed,
+      eventsFilteredOut: totalRawEvents - totalEvents,
+    });
+
     // Build status message with incremental sync info
     const statusParts: string[] = [];
     statusParts.push(`${totalEvents} event(s) from ${calendars.length} calendar(s)`);
     if (fetchResult.stats.cached > 0) {
       statusParts.push(`(${fetchResult.stats.cached} cached)`);
     }
+    statusParts.push(`in ${(syncDurationMs / 1000).toFixed(1)}s`);
 
     if (trigger === "manual" || trigger === "force") {
       showStatusMessage(`Synced ${statusParts.join(" ")}`, "success");

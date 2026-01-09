@@ -14,10 +14,66 @@ export interface CalendarCacheEntry {
 }
 
 /**
+ * Storage key for persistent cache.
+ */
+const CACHE_STORAGE_KEY = "roam-ical-sync-cache";
+
+/**
+ * Cache TTL in milliseconds (24 hours).
+ * Entries older than this are considered stale and will be removed.
+ */
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+
+/**
  * In-memory cache for calendar data.
- * Persisted per session to enable incremental sync.
+ * Backed by localStorage for persistence across sessions.
  */
 const calendarCache = new Map<string, CalendarCacheEntry>();
+
+/**
+ * Loads cache from localStorage on module initialization.
+ */
+function loadCacheFromStorage(): void {
+  try {
+    const stored = localStorage.getItem(CACHE_STORAGE_KEY);
+    if (!stored) return;
+
+    const entries: CalendarCacheEntry[] = JSON.parse(stored);
+    const now = Date.now();
+
+    for (const entry of entries) {
+      // Skip stale entries
+      if (now - entry.lastFetched > CACHE_TTL_MS) {
+        continue;
+      }
+      calendarCache.set(entry.url, entry);
+    }
+
+    logDebug("cache_loaded", {
+      entriesLoaded: calendarCache.size,
+      entriesTotal: entries.length,
+    });
+  } catch {
+    // Ignore errors - start with empty cache
+    logDebug("cache_load_failed", { message: "Could not load cache from localStorage" });
+  }
+}
+
+/**
+ * Saves cache to localStorage.
+ */
+function saveCacheToStorage(): void {
+  try {
+    const entries = Array.from(calendarCache.values());
+    localStorage.setItem(CACHE_STORAGE_KEY, JSON.stringify(entries));
+  } catch {
+    // Ignore errors - cache still works in memory
+    logDebug("cache_save_failed", { message: "Could not save cache to localStorage" });
+  }
+}
+
+// Load cache on module initialization
+loadCacheFromStorage();
 
 /**
  * Clears the calendar cache.
@@ -25,17 +81,45 @@ const calendarCache = new Map<string, CalendarCacheEntry>();
  */
 export function clearCalendarCache(): void {
   calendarCache.clear();
+  try {
+    localStorage.removeItem(CACHE_STORAGE_KEY);
+  } catch {
+    // Ignore localStorage errors
+  }
   logDebug("cache_cleared", { message: "Calendar cache cleared" });
 }
 
 /**
  * Gets cache statistics for debugging.
  */
-export function getCacheStats(): { size: number; entries: string[] } {
+export function getCacheStats(): { size: number; entries: string[]; persistent: boolean } {
   return {
     size: calendarCache.size,
     entries: Array.from(calendarCache.keys()),
+    persistent: typeof localStorage !== "undefined",
   };
+}
+
+/**
+ * FNV-1a hash constants.
+ */
+const FNV_PRIME = 0x01000193;
+const FNV_OFFSET = 0x811c9dc5;
+
+/**
+ * Simple FNV-1a hash implementation.
+ * Produces a deterministic 32-bit hash from a string.
+ *
+ * @param str Input string to hash.
+ * @returns 32-bit unsigned integer hash.
+ */
+function fnv1aHash(str: string): number {
+  let hash = FNV_OFFSET;
+  for (let i = 0; i < str.length; i++) {
+    hash ^= str.charCodeAt(i);
+    hash = Math.imul(hash, FNV_PRIME);
+  }
+  return hash >>> 0; // Convert to unsigned 32-bit integer
 }
 
 /**
@@ -43,15 +127,7 @@ export function getCacheStats(): { size: number; entries: string[] } {
  * Used to detect if calendar content has changed.
  */
 function hashContent(content: string): string {
-  const FNV_PRIME = 0x01000193;
-  const FNV_OFFSET = 0x811c9dc5;
-
-  let hash = FNV_OFFSET;
-  for (let i = 0; i < content.length; i++) {
-    hash ^= content.charCodeAt(i);
-    hash = Math.imul(hash, FNV_PRIME);
-  }
-  return (hash >>> 0).toString(36);
+  return fnv1aHash(content).toString(36);
 }
 
 /**
@@ -504,9 +580,10 @@ async function fetchWithCorsProxy(url: string, forceRefresh = false): Promise<In
   if (response.status === 304 && cacheEntry) {
     logInfo(`Calendar unchanged (304): ${url}`);
 
-    // Update last fetched time
+    // Update last fetched time and persist
     cacheEntry.lastFetched = Date.now();
     calendarCache.set(url, cacheEntry);
+    saveCacheToStorage();
 
     return {
       content: "", // Empty content signals no change
@@ -544,7 +621,7 @@ async function fetchWithCorsProxy(url: string, forceRefresh = false): Promise<In
     });
   }
 
-  // Update cache
+  // Update cache and persist
   calendarCache.set(url, {
     url,
     etag,
@@ -552,6 +629,7 @@ async function fetchWithCorsProxy(url: string, forceRefresh = false): Promise<In
     contentHash,
     lastFetched: Date.now(),
   });
+  saveCacheToStorage();
 
   return {
     content: text,
@@ -724,25 +802,6 @@ export async function fetchAllCalendars(
 export function safeText(value: string | null | undefined): string {
   if (!value) return "";
   return value.replace(/[\r\n]+/g, " ").trim();
-}
-
-/**
- * Simple FNV-1a hash implementation.
- * Produces a deterministic 32-bit hash from a string.
- *
- * @param str Input string to hash.
- * @returns 32-bit unsigned integer hash.
- */
-function fnv1aHash(str: string): number {
-  const FNV_PRIME = 0x01000193;
-  const FNV_OFFSET = 0x811c9dc5;
-
-  let hash = FNV_OFFSET;
-  for (let i = 0; i < str.length; i++) {
-    hash ^= str.charCodeAt(i);
-    hash = Math.imul(hash, FNV_PRIME);
-  }
-  return hash >>> 0; // Convert to unsigned 32-bit integer
 }
 
 /**

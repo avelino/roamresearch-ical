@@ -275,6 +275,94 @@ function sanitizeTagName(name: string): string {
 }
 
 /**
+ * Attendee info extracted from iCal event.
+ */
+interface AttendeeInfo {
+  name: string;
+  email: string;
+}
+
+/**
+ * Extracts a clean display name from an attendee.
+ * Handles various edge cases like email-as-name, mailto: prefixes, etc.
+ *
+ * @param attendee Attendee info from iCal event.
+ * @returns Clean display name or undefined if not extractable.
+ */
+function extractAttendeeDisplayName(attendee: AttendeeInfo): string | undefined {
+  // Clean up email by removing mailto: prefix
+  const cleanEmail = attendee.email?.replace(/^mailto:/i, "").trim() || "";
+  const name = attendee.name?.trim() || "";
+
+  // Case 1: Name is provided and is not an email address
+  if (name && !name.includes("@")) {
+    return name;
+  }
+
+  // Case 2: Name looks like an email - extract from email part
+  const emailToUse = name.includes("@") ? name : cleanEmail;
+  if (!emailToUse) {
+    return undefined;
+  }
+
+  // Extract local part before @ and format it
+  const localPart = emailToUse.split("@")[0];
+  if (!localPart) {
+    return undefined;
+  }
+
+  // Convert "john.doe" or "john_doe" or "john-doe" to "John Doe"
+  return localPart
+    .split(/[._-]/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(" ");
+}
+
+/**
+ * Builds Roam page references for attendees.
+ * Handles alias mapping and formats names as proper page references.
+ *
+ * @param attendees Array of attendee info from iCal event.
+ * @param aliases Map of name/email to Roam page names.
+ * @returns Array of formatted page reference strings.
+ */
+function buildAttendeeReferences(
+  attendees: AttendeeInfo[],
+  aliases?: Map<string, string>
+): string[] {
+  const references: string[] = [];
+
+  for (const attendee of attendees) {
+    // Clean email for alias lookup
+    const cleanEmail = attendee.email?.replace(/^mailto:/i, "").trim().toLowerCase() || "";
+    const cleanName = attendee.name?.trim().toLowerCase() || "";
+
+    // 1. Check aliases first (by name or email)
+    let pageName = aliases?.get(cleanName) || aliases?.get(cleanEmail);
+
+    if (pageName) {
+      // Ensure alias has proper Roam brackets
+      if (!pageName.startsWith("[[") && !pageName.startsWith("http")) {
+        pageName = `[[${pageName}]]`;
+      }
+      references.push(pageName);
+      continue;
+    }
+
+    // 2. Extract display name and create page reference
+    const displayName = extractAttendeeDisplayName(attendee);
+    if (displayName) {
+      // Format as @mention style: [[@Name]]
+      references.push(`[[@${displayName}]]`);
+    }
+  }
+
+  // Remove duplicates while preserving order
+  return [...new Set(references)];
+}
+
+/**
  * Builds the block content for an event.
  * Format: [prefix] [[Date]] Event Title #calendarName
  *
@@ -322,58 +410,11 @@ function buildEventBlock(
     );
   }
 
-  // Add attendees
+  // Add attendees using the dedicated helper function
   if (event.attendees && event.attendees.length > 0) {
-    const attendeeLinks: string[] = [];
-    for (const attendee of event.attendees) {
-      // 1. Check aliases (Name or Email)
-      let pageName =
-        aliases?.get(attendee.name.toLowerCase()) || aliases?.get(attendee.email.toLowerCase());
-
-      if (!pageName) {
-        // 2. Fallback: Use name or email part
-        let displayName = attendee.name;
-
-        // If name looks like an email (contains @), treat it as an email to be parsed
-        if (displayName && displayName.includes("@")) {
-          // Force parsing logic below by setting it to empty, but keeping attendee.email if valid
-          // If attendee.name IS the email, we use that as the source email
-          if (!attendee.email) {
-            attendee.email = displayName;
-          }
-          displayName = "";
-        }
-
-        if (!displayName && attendee.email) {
-          // Extract name from email (avelino from avelino@example.com)
-          const localPart = attendee.email.split("@")[0];
-          // Capitalize/Format (avelino -> Avelino)
-          displayName = localPart
-            .split(/[._-]/)
-            .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-            .join(" ");
-        }
-
-        if (displayName) {
-          // 3. Apply standard formatting
-          pageName = displayName.startsWith("@") ? `[[${displayName}]]` : `[[@${displayName}]]`;
-        }
-      } else {
-        // Ensure alias has brackets if it's a page reference
-        if (!pageName.startsWith("[[") && !pageName.startsWith("http")) {
-          pageName = `[[${pageName}]]`;
-        }
-      }
-
-      if (pageName) {
-        attendeeLinks.push(pageName);
-      }
-    }
-
+    const attendeeLinks = buildAttendeeReferences(event.attendees, aliases);
     if (attendeeLinks.length > 0) {
-      // Remove duplicates
-      const uniqueLinks = Array.from(new Set(attendeeLinks));
-      children.push(createPropertyBlock(ICAL_ATTENDEES_PROPERTY, uniqueLinks.join(", ")));
+      children.push(createPropertyBlock(ICAL_ATTENDEES_PROPERTY, attendeeLinks.join(", ")));
     }
   }
 
@@ -414,13 +455,21 @@ async function writeBlocksToPage(pageName: string, blocks: BlockPayload[]): Prom
       continue;
     }
 
-    // Skip if we already processed this ical-id in this batch
-    // (handles recurring events with same UID but different dates)
-    if (seenIds.has(icalId)) {
-      logDebug("skip_duplicate_ical_id", { icalId, pageName });
+    // Extract date from block text for recurring event support
+    // Block format: "[[Date]] Event Title #tag" or "#prefix [[Date]] Event Title #tag"
+    const dateMatch = block.text.match(/\[\[([^\]]+)\]\]/);
+    const eventDate = dateMatch ? dateMatch[1] : "";
+
+    // Create unique key combining UID and date
+    // This allows recurring events (same UID, different dates) to be stored separately
+    const uniqueKey = `${icalId}_${eventDate}`;
+
+    // Skip if we already processed this ical-id + date combination in this batch
+    if (seenIds.has(uniqueKey)) {
+      logDebug("skip_duplicate_event", { icalId, eventDate, pageName });
       continue;
     }
-    seenIds.add(icalId);
+    seenIds.add(uniqueKey);
 
     const existing = blockMap.get(icalId);
     if (existing) {
