@@ -18,6 +18,8 @@ import {
   DEFAULT_SHOW_TIMEZONE,
   DEFAULT_ENABLE_SMART_SYNC,
   DEFAULT_ENABLE_ERROR_REPORTS,
+  DEFAULT_ENABLE_REMINDERS,
+  DEFAULT_REMINDER_MINUTES,
 } from "./constants";
 import { validateCalendarUrl, type CalendarValidationResult } from "./url-validation";
 
@@ -50,6 +52,9 @@ export const SETTINGS_KEYS = {
   enableSmartSync: "enable_smart_sync",
   // Error reporting settings
   enableErrorReports: "enable_error_reports",
+  // Reminder settings
+  enableReminders: "enable_reminders",
+  reminderMinutes: "reminder_minutes",
 } as const;
 
 /**
@@ -78,6 +83,9 @@ export const DEFAULT_SETTINGS: Record<string, unknown> = {
   [SETTINGS_KEYS.enableSmartSync]: DEFAULT_ENABLE_SMART_SYNC,
   // Error reporting settings
   [SETTINGS_KEYS.enableErrorReports]: DEFAULT_ENABLE_ERROR_REPORTS,
+  // Reminder settings
+  [SETTINGS_KEYS.enableReminders]: DEFAULT_ENABLE_REMINDERS,
+  [SETTINGS_KEYS.reminderMinutes]: DEFAULT_REMINDER_MINUTES,
 };
 
 // Helper functions

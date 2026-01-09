@@ -851,10 +851,20 @@ export async function fetchICalCalendar(
 }
 
 /**
+ * Error info for a failed calendar fetch.
+ */
+export interface CalendarFetchError {
+  name: string;
+  url: string;
+  error: Error;
+}
+
+/**
  * Result from fetching all calendars with sync statistics.
  */
 export interface FetchAllResult {
   calendars: ICalCalendarResult[];
+  errors: CalendarFetchError[];
   stats: {
     total: number;
     changed: number;
@@ -879,11 +889,13 @@ export async function fetchAllCalendars(
   if (configs.length === 0) {
     return {
       calendars: [],
+      errors: [],
       stats: { total: 0, changed: 0, cached: 0, failed: 0 },
     };
   }
 
   const calendars: ICalCalendarResult[] = [];
+  const errors: CalendarFetchError[] = [];
   let changed = 0;
   let cached = 0;
   let failed = 0;
@@ -908,6 +920,11 @@ export async function fetchAllCalendars(
       await yieldToMain();
     } catch (error) {
       logError(`Calendar fetch failed: ${config.name}`, error);
+      errors.push({
+        name: config.name,
+        url: config.url,
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
       failed++;
       // Continue with next calendar on error
     }
@@ -922,7 +939,7 @@ export async function fetchAllCalendars(
 
   logDebug("fetch_all_complete", stats);
 
-  return { calendars, stats };
+  return { calendars, errors, stats };
 }
 
 /**

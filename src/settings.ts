@@ -18,6 +18,8 @@ import {
   DEFAULT_SHOW_TIMEZONE,
   DEFAULT_ENABLE_SMART_SYNC,
   DEFAULT_ENABLE_ERROR_REPORTS,
+  DEFAULT_ENABLE_REMINDERS,
+  DEFAULT_REMINDER_MINUTES,
 } from "./constants";
 import type { TimeFormat } from "./ical";
 import { logWarn } from "./logger";
@@ -78,6 +80,9 @@ export type SettingsSnapshot = {
   enableSmartSync: boolean;
   // Error reporting settings
   enableErrorReports: boolean;
+  // Reminder settings
+  enableReminders: boolean;
+  reminderMinutes: number;
 };
 
 export type SettingsHandle =
@@ -184,6 +189,10 @@ function readSettingsFromPanel(
   // Error reporting settings
   const enableErrorReports = getBoolean(allSettings, SETTINGS_KEYS.enableErrorReports, DEFAULT_ENABLE_ERROR_REPORTS);
 
+  // Reminder settings
+  const enableReminders = getBoolean(allSettings, SETTINGS_KEYS.enableReminders, DEFAULT_ENABLE_REMINDERS);
+  const reminderMinutes = getNumber(allSettings, SETTINGS_KEYS.reminderMinutes, DEFAULT_REMINDER_MINUTES);
+
   return {
     pagePrefix,
     intervalMs: intervalMinutes * 60 * 1000,
@@ -202,6 +211,8 @@ function readSettingsFromPanel(
     showTimezone,
     enableSmartSync,
     enableErrorReports,
+    enableReminders,
+    reminderMinutes,
   };
 }
 
@@ -315,6 +326,14 @@ function readSettingsFromPage(pageUid: string): SettingsSnapshot {
   // Error reporting settings (use defaults for page-based config)
   const enableErrorReports = hasFlag(tree, "Enable Error Reports");
 
+  // Reminder settings (use defaults for page-based config)
+  const enableReminders = hasFlag(tree, "Enable Reminders");
+  const reminderMinutes = getSettingIntFromTree({
+    tree,
+    key: "Reminder Minutes",
+    defaultValue: DEFAULT_REMINDER_MINUTES,
+  });
+
   return {
     pagePrefix,
     intervalMs,
@@ -333,6 +352,8 @@ function readSettingsFromPage(pageUid: string): SettingsSnapshot {
     showTimezone,
     enableSmartSync,
     enableErrorReports,
+    enableReminders,
+    reminderMinutes,
   };
 }
 

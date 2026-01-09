@@ -7,6 +7,9 @@ import {
   clearCalendarCache,
   type ICalCalendar,
   type ICalCalendarResult,
+  type ICalEvent,
+  type CalendarFetchError,
+  type FetchAllResult,
 } from "./ical";
 import {
   initializeSettings,
@@ -15,8 +18,32 @@ import {
   type SettingsSnapshot,
 } from "./settings";
 import { cancelScheduledSync, scheduleAutoSync } from "./scheduler";
-import { registerCommand, registerTopbarButton } from "./ui";
+import { registerCommand, registerTopbarButton, registerSearchCommand } from "./ui";
 import { logError, logInfo, logDebug, setDebugEnabled } from "./logger";
+
+// Feature modules
+import {
+  loadEventCache,
+  saveEventCache,
+  detectEventChanges,
+  updateEventCache,
+  type SmartSyncStats,
+} from "./event-cache";
+import {
+  createErrorReportPage,
+  classifyError,
+  type CalendarError,
+  type ErrorReport,
+} from "./error-report";
+import {
+  detectConflicts,
+  type ConflictDetectionConfig,
+} from "./conflicts";
+import {
+  checkAndSendReminders,
+  type ReminderConfig,
+} from "./reminders";
+import { searchEvents } from "./search";
 
 /**
  * Extension API interface provided by Roam Research.
@@ -61,8 +88,14 @@ let extensionAPIRef: ExtensionAPI | null = null;
 let lastIntervalMs: number | null = null;
 let lastCalendarCount: number | undefined;
 let unregisterCommand: (() => Promise<void>) | null = null;
+let unregisterSearchCommand: (() => Promise<void>) | null = null;
 let removeTopbarButton: (() => void) | null = null;
+let reminderIntervalId: ReturnType<typeof setInterval> | null = null;
+let lastSyncedEvents: ICalEvent[] = [];
 let initialized = false;
+
+/** Reminder check interval in milliseconds (1 minute) */
+const REMINDER_CHECK_INTERVAL_MS = 60 * 1000;
 
 /**
  * Extension onload handler - called by Roam when the extension is loaded.
@@ -79,10 +112,19 @@ async function onload(args: OnloadArgs): Promise<void> {
     const { extensionAPI } = args;
     extensionAPIRef = extensionAPI;
     settingsHandle = await initializeSettings(extensionAPI);
-    refreshSettings();
+    const settings = refreshSettings();
 
+    // Register sync command and topbar button
     unregisterCommand = await registerCommand(extensionAPI, () => syncCalendars("manual"));
     removeTopbarButton = registerTopbarButton(() => syncCalendars("manual"));
+
+    // Register search command
+    unregisterSearchCommand = await registerSearchCommand(extensionAPI, async (query) => {
+      return searchEvents(query, settings.pagePrefix);
+    });
+
+    // Start reminder checker if reminders are enabled
+    startReminderChecker();
 
     initialized = true;
     logInfo("iCal Sync extension loaded successfully");
@@ -96,6 +138,8 @@ async function onload(args: OnloadArgs): Promise<void> {
  */
 function onunload(): void {
   cancelScheduledSync();
+  stopReminderChecker();
+
   if (removeTopbarButton) {
     removeTopbarButton();
     removeTopbarButton = null;
@@ -104,11 +148,17 @@ function onunload(): void {
     void unregisterCommand();
     unregisterCommand = null;
   }
+  if (unregisterSearchCommand) {
+    void unregisterSearchCommand();
+    unregisterSearchCommand = null;
+  }
+
   settingsHandle?.dispose();
   settingsHandle = null;
   extensionAPIRef = null;
   lastIntervalMs = null;
   lastCalendarCount = undefined;
+  lastSyncedEvents = [];
   initialized = false;
   logInfo("iCal Sync extension unloaded");
 }
@@ -232,11 +282,31 @@ async function syncCalendars(trigger: "manual" | "auto" | "force") {
       stats: fetchResult.stats,
     });
 
+    // Handle any sync errors (create error report if enabled)
+    await handleSyncErrors(fetchResult, settings);
+
     if (calendars.length === 0) {
       if (trigger === "manual" || trigger === "force") {
         showStatusMessage("No calendars could be loaded. Check your URLs.", "warning");
       }
       return;
+    }
+
+    // Collect all events for smart sync and conflict detection
+    const allEvents: ICalEvent[] = calendars.flatMap(cal => cal.events);
+
+    // Store events for reminder checking
+    lastSyncedEvents = allEvents;
+
+    // Apply smart sync to filter out unchanged events
+    const smartSyncResult = applySmartSync(allEvents, settings.enableSmartSync);
+
+    // Detect scheduling conflicts
+    checkForConflicts(allEvents);
+
+    // Log smart sync stats
+    if (settings.enableSmartSync && smartSyncResult.stats.unchanged > 0) {
+      logDebug("smart_sync_applied", { ...smartSyncResult.stats });
     }
 
     await writeBlocks(
@@ -270,6 +340,7 @@ async function syncCalendars(trigger: "manual" | "auto" | "force") {
       calendarsChanged: fetchResult.stats.changed,
       calendarsFailed: fetchResult.stats.failed,
       eventsFilteredOut: totalRawEvents - totalEvents,
+      smartSync: smartSyncResult.stats,
     });
 
     // Build status message with incremental sync info
@@ -277,6 +348,9 @@ async function syncCalendars(trigger: "manual" | "auto" | "force") {
     statusParts.push(`${totalEvents} event(s) from ${calendars.length} calendar(s)`);
     if (fetchResult.stats.cached > 0) {
       statusParts.push(`(${fetchResult.stats.cached} cached)`);
+    }
+    if (settings.enableSmartSync && smartSyncResult.stats.unchanged > 0) {
+      statusParts.push(`(${smartSyncResult.stats.unchanged} unchanged)`);
     }
     statusParts.push(`in ${(syncDurationMs / 1000).toFixed(1)}s`);
 
@@ -312,5 +386,146 @@ function showStatusMessage(message: string, type: "info" | "warning" | "success"
     console.error(message);
   } else {
     console.info(message);
+  }
+}
+
+/**
+ * Starts the reminder checker interval.
+ * Checks every minute for upcoming events that need reminders.
+ */
+function startReminderChecker(): void {
+  if (reminderIntervalId) {
+    return; // Already running
+  }
+
+  reminderIntervalId = setInterval(async () => {
+    if (!extensionAPIRef || !settingsHandle) {
+      return;
+    }
+
+    try {
+      // Read settings to check if reminders are enabled
+      const settings = readSettings(extensionAPIRef, settingsHandle);
+
+      // Build reminder config from settings
+      const reminderConfig: ReminderConfig = {
+        enabled: settings.enableReminders,
+        reminderMinutes: settings.reminderMinutes,
+      };
+
+      if (reminderConfig.enabled && lastSyncedEvents.length > 0) {
+        const sent = await checkAndSendReminders(lastSyncedEvents, reminderConfig);
+        if (sent > 0) {
+          logDebug("reminders_sent", { count: sent });
+        }
+      }
+    } catch (error) {
+      logError("Reminder check failed", error);
+    }
+  }, REMINDER_CHECK_INTERVAL_MS);
+
+  logDebug("reminder_checker_started", { intervalMs: REMINDER_CHECK_INTERVAL_MS });
+}
+
+/**
+ * Stops the reminder checker interval.
+ */
+function stopReminderChecker(): void {
+  if (reminderIntervalId) {
+    clearInterval(reminderIntervalId);
+    reminderIntervalId = null;
+    logDebug("reminder_checker_stopped", {});
+  }
+}
+
+/**
+ * Processes calendar fetch errors and creates error report if enabled.
+ */
+async function handleSyncErrors(
+  fetchResult: FetchAllResult,
+  settings: SettingsSnapshot
+): Promise<void> {
+  if (fetchResult.errors.length === 0 || !settings.enableErrorReports) {
+    return;
+  }
+
+  const errors: CalendarError[] = fetchResult.errors.map((fetchError: CalendarFetchError) => {
+    const classified = classifyError(fetchError.error);
+    return {
+      calendarName: fetchError.name,
+      url: fetchError.url,
+      errorType: classified.type,
+      httpStatus: classified.httpStatus,
+      message: fetchError.error.message,
+      timestamp: new Date(),
+    };
+  });
+
+  const report: ErrorReport = {
+    timestamp: new Date(),
+    totalCalendars: fetchResult.stats.total,
+    successCount: fetchResult.stats.total - fetchResult.stats.failed,
+    failedCount: fetchResult.stats.failed,
+    errors,
+  };
+
+  try {
+    await createErrorReportPage(report);
+    logInfo(`Created error report for ${errors.length} failed calendar(s)`);
+  } catch (err) {
+    logError("Failed to create error report page", err);
+  }
+}
+
+/**
+ * Applies smart sync to filter out unchanged events.
+ */
+function applySmartSync(
+  allEvents: ICalEvent[],
+  enabled: boolean
+): { eventsToWrite: ICalEvent[]; stats: SmartSyncStats } {
+  if (!enabled) {
+    return {
+      eventsToWrite: allEvents,
+      stats: {
+        totalEvents: allEvents.length,
+        unchanged: 0,
+        updated: 0,
+        created: allEvents.length,
+      },
+    };
+  }
+
+  const cache = loadEventCache();
+  const result = detectEventChanges(allEvents, cache);
+
+  // Update cache with all events (to track them for next sync)
+  updateEventCache(allEvents, cache);
+  saveEventCache(cache);
+
+  return {
+    eventsToWrite: result.eventsToWrite,
+    stats: result.stats,
+  };
+}
+
+/**
+ * Detects conflicts among events and logs them.
+ */
+function checkForConflicts(events: ICalEvent[]): void {
+  const config: ConflictDetectionConfig = {
+    enabled: true,
+    excludeAllDay: true,
+    minimumOverlapMinutes: 15,
+  };
+
+  const result = detectConflicts(events, config);
+
+  if (result.totalConflicts > 0) {
+    logInfo(`Detected ${result.totalConflicts} scheduling conflict(s)`);
+    logDebug("conflicts_detected", {
+      totalConflicts: result.totalConflicts,
+      conflictingEventUids: Array.from(result.conflictingEventUids),
+    });
   }
 }

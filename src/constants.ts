@@ -64,5 +64,9 @@ export const DEFAULT_ENABLE_SMART_SYNC = true;
 /** Error reporting settings */
 export const DEFAULT_ENABLE_ERROR_REPORTS = false;
 
+/** Reminder settings */
+export const DEFAULT_ENABLE_REMINDERS = false;
+export const DEFAULT_REMINDER_MINUTES = 15;
+
 /** Search command label */
 export const SEARCH_COMMAND_LABEL = "iCal: Search events";

@@ -29,7 +29,7 @@ export interface ReminderConfig {
   /** Whether reminders are enabled */
   enabled: boolean;
   /** Minutes before event to send reminder */
-  reminderMinutes: ReminderMinutes;
+  reminderMinutes: number;
 }
 
 /**
@@ -167,7 +167,7 @@ function createNotificationKey(event: ICalEvent): string {
  */
 export function shouldNotify(
   event: ICalEvent,
-  reminderMinutes: ReminderMinutes,
+  reminderMinutes: number,
   state: Map<string, NotificationState>
 ): boolean {
   // Need a start time to calculate notification time
@@ -208,7 +208,7 @@ export function shouldNotify(
  */
 export function showEventNotification(
   event: ICalEvent,
-  reminderMinutes: ReminderMinutes
+  reminderMinutes: number
 ): Notification | null {
   if (!canShowNotifications()) {
     return null;
