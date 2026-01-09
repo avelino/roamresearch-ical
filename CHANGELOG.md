@@ -1,3 +1,11 @@
+# [1.3.0](https://github.com/avelino/roamresearch-ical/compare/v1.2.0...v1.3.0) (2026-01-09)
+
+
+### Features
+
+* add 10 major features for calendar power users ([8fc3acb](https://github.com/avelino/roamresearch-ical/commit/8fc3acbe25a14f66ec49bc95bee0c0f28ab45469))
+* add 10 new features for enhanced calendar sync ([c837c6b](https://github.com/avelino/roamresearch-ical/commit/c837c6b740e3554bdacfbdccacf9125ebc5f5097))
+
 # [1.2.0](https://github.com/avelino/roamresearch-ical/compare/v1.1.0...v1.2.0) (2025-12-18)
 
 
