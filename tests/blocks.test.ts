@@ -13,6 +13,8 @@ function createMockEvent(overrides: Partial<ICalEvent> = {}): ICalEvent {
     location: "",
     url: "",
     attendees: [],
+    isAllDay: false,
+    isRecurring: false,
     ...overrides,
   };
 }
@@ -77,6 +79,10 @@ describe("BatchConfig", () => {
       excludePatterns: [],
       titlePrefix: "#gcal",
       attendeeAliases: new Map(),
+      showTime: true,
+      timeFormat: "24h",
+      recurringIndicator: "🔄",
+      showTimezone: false,
     };
 
     expect(config.batchSize).toBe(50);
@@ -84,6 +90,10 @@ describe("BatchConfig", () => {
     expect(config.excludePatterns).toEqual([]);
     expect(config.titlePrefix).toBe("#gcal");
     expect(config.attendeeAliases.size).toBe(0);
+    expect(config.showTime).toBe(true);
+    expect(config.timeFormat).toBe("24h");
+    expect(config.recurringIndicator).toBe("🔄");
+    expect(config.showTimezone).toBe(false);
   });
 
   it("should support custom exclude patterns", () => {
@@ -93,11 +103,19 @@ describe("BatchConfig", () => {
       excludePatterns: [/^Busy$/i, /^Private$/i],
       titlePrefix: "",
       attendeeAliases: new Map([["john@example.com", "@John"]]),
+      showTime: false,
+      timeFormat: "12h",
+      recurringIndicator: "#recurring",
+      showTimezone: true,
     };
 
     expect(config.excludePatterns.length).toBe(2);
     expect(config.excludePatterns[0].test("Busy")).toBe(true);
     expect(config.excludePatterns[1].test("Private")).toBe(true);
     expect(config.attendeeAliases.get("john@example.com")).toBe("@John");
+    expect(config.showTime).toBe(false);
+    expect(config.timeFormat).toBe("12h");
+    expect(config.recurringIndicator).toBe("#recurring");
+    expect(config.showTimezone).toBe(true);
   });
 });

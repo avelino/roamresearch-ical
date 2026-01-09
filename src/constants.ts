@@ -33,3 +33,36 @@ export const DEFAULT_SYNC_DAYS_FUTURE = 30;
 
 /** Default title prefix for event blocks */
 export const DEFAULT_TITLE_PREFIX = "#gcal";
+
+/** Time display settings */
+export const DEFAULT_SHOW_TIME = true;
+export const DEFAULT_TIME_FORMAT = "24h" as const;
+
+/** Recurring event indicator settings */
+export const DEFAULT_RECURRING_INDICATOR = "🔄"; // Options: "", "🔄", "#recurring"
+
+/** Timezone display settings */
+export const DEFAULT_SHOW_TIMEZONE = false;
+export const ICAL_TIMEZONE_PROPERTY = "ical-timezone";
+
+/** Calendar color settings */
+export const ICAL_COLOR_PROPERTY = "ical-color";
+export const DEFAULT_CALENDAR_COLORS = [
+  "#4285f4", // Google Blue
+  "#ea4335", // Google Red
+  "#fbbc04", // Google Yellow
+  "#34a853", // Google Green
+  "#8e24aa", // Purple
+  "#e67c73", // Salmon
+  "#f6bf26", // Tangerine
+  "#33b679", // Teal
+];
+
+/** Smart sync settings */
+export const DEFAULT_ENABLE_SMART_SYNC = true;
+
+/** Error reporting settings */
+export const DEFAULT_ENABLE_ERROR_REPORTS = false;
+
+/** Search command label */
+export const SEARCH_COMMAND_LABEL = "iCal: Search events";

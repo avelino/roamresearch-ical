@@ -1,3 +1,5 @@
+// eslint-disable-next-line @typescript-eslint/triple-slash-reference
+/// <reference path="./ical.d.ts" />
 import ICAL from "ical.js";
 import { logDebug, logError, logInfo } from "./logger";
 
@@ -169,6 +171,11 @@ function getRoamProxyUrl(): string {
 const PARSE_YIELD_BATCH_SIZE = 50;
 
 /**
+ * Time format options for display.
+ */
+export type TimeFormat = "24h" | "12h";
+
+/**
  * Represents a parsed iCal event.
  */
 export interface ICalEvent {
@@ -181,6 +188,14 @@ export interface ICalEvent {
   url: string;
   meetingUrl?: string;
   attendees: { name: string; email: string }[];
+  /** True if event is all-day (no specific time) */
+  isAllDay: boolean;
+  /** True if event has recurrence rules */
+  isRecurring: boolean;
+  /** IANA timezone ID for start time (e.g., "America/New_York") */
+  dtstartTzid?: string;
+  /** IANA timezone ID for end time */
+  dtendTzid?: string;
 }
 
 /**
@@ -341,6 +356,8 @@ export interface ICalCalendar {
   name: string;
   url: string;
   events: ICalEvent[];
+  /** Optional color for the calendar (hex code or color name) */
+  color?: string;
 }
 
 /**
@@ -349,6 +366,8 @@ export interface ICalCalendar {
 export interface CalendarConfig {
   name: string;
   url: string;
+  /** Optional color for the calendar (hex code like "#4285f4" or color name like "blue") */
+  color?: string;
 }
 
 const MONTH_NAMES = [
@@ -394,6 +413,89 @@ export function formatRoamDate(date: Date): string {
   const day = date.getDate();
   const year = date.getFullYear();
   return `${month} ${day}${getOrdinalSuffix(day)}, ${year}`;
+}
+
+/**
+ * Formats time in the specified format.
+ *
+ * @param date Date to format.
+ * @param format Time format ("24h" or "12h").
+ * @returns Formatted time string (e.g., "14:30" or "2:30 PM").
+ */
+export function formatTime(date: Date, format: TimeFormat): string {
+  const hours = date.getHours();
+  const minutes = date.getMinutes().toString().padStart(2, "0");
+
+  if (format === "24h") {
+    return `${hours.toString().padStart(2, "0")}:${minutes}`;
+  }
+
+  // 12-hour format
+  const period = hours >= 12 ? "PM" : "AM";
+  const hour12 = hours % 12 || 12;
+  return `${hour12}:${minutes} ${period}`;
+}
+
+/**
+ * Common timezone abbreviations mapping.
+ */
+const TIMEZONE_ABBREVIATIONS: Record<string, string> = {
+  "America/New_York": "EST",
+  "America/Chicago": "CST",
+  "America/Denver": "MST",
+  "America/Los_Angeles": "PST",
+  "America/Sao_Paulo": "BRT",
+  "America/Toronto": "EST",
+  "America/Vancouver": "PST",
+  "Europe/London": "GMT",
+  "Europe/Paris": "CET",
+  "Europe/Berlin": "CET",
+  "Europe/Amsterdam": "CET",
+  "Europe/Madrid": "CET",
+  "Europe/Rome": "CET",
+  "Europe/Zurich": "CET",
+  "Asia/Tokyo": "JST",
+  "Asia/Shanghai": "CST",
+  "Asia/Hong_Kong": "HKT",
+  "Asia/Singapore": "SGT",
+  "Asia/Kolkata": "IST",
+  "Asia/Dubai": "GST",
+  "Australia/Sydney": "AEST",
+  "Australia/Melbourne": "AEST",
+  "Pacific/Auckland": "NZST",
+  UTC: "UTC",
+};
+
+/**
+ * Gets timezone abbreviation from IANA timezone ID.
+ *
+ * @param tzid IANA timezone ID (e.g., "America/New_York").
+ * @returns Abbreviation (e.g., "EST") or last part of ID if unknown.
+ */
+export function getTimezoneAbbreviation(tzid: string | undefined): string {
+  if (!tzid) return "";
+  return TIMEZONE_ABBREVIATIONS[tzid] || tzid.split("/").pop() || tzid;
+}
+
+/**
+ * Formats time with optional timezone abbreviation.
+ *
+ * @param date Date to format.
+ * @param format Time format ("24h" or "12h").
+ * @param tzid Optional IANA timezone ID.
+ * @returns Formatted time with timezone (e.g., "14:30 EST" or "2:30 PM EST").
+ */
+export function formatTimeWithTimezone(
+  date: Date,
+  format: TimeFormat,
+  tzid?: string
+): string {
+  const timeStr = formatTime(date, format);
+  if (tzid) {
+    const abbrev = getTimezoneAbbreviation(tzid);
+    return `${timeStr} ${abbrev}`;
+  }
+  return timeStr;
 }
 
 /**
@@ -480,6 +582,28 @@ export async function parseICalContent(content: string, calendarName: string): P
           extractMeetingUrl(description) ||
           extractMeetingUrl(url);
 
+        // Extract all-day status from start date
+        // ical.js Time.isDate is true for DATE values (all-day events)
+        const isAllDay = event.startDate?.isDate ?? false;
+
+        // Check if event is recurring (has RRULE)
+        const isRecurring = event.isRecurring();
+
+        // Extract timezone information from dtstart/dtend properties
+        // Try property parameter first, then fall back to Time object's timezone
+        const dtstartProp = vevent.getFirstProperty("dtstart");
+        const dtendProp = vevent.getFirstProperty("dtend");
+
+        const dtstartTzid =
+          (dtstartProp?.getParameter?.("tzid") as string | undefined) ??
+          event.startDate?.timezone ??
+          undefined;
+
+        const dtendTzid =
+          (dtendProp?.getParameter?.("tzid") as string | undefined) ??
+          event.endDate?.timezone ??
+          undefined;
+
         const icalEvent: ICalEvent = {
           uid: event.uid || "",
           summary: event.summary || "",
@@ -490,6 +614,10 @@ export async function parseICalContent(content: string, calendarName: string): P
           url: url,
           meetingUrl: meetingUrl,
           attendees,
+          isAllDay,
+          isRecurring,
+          dtstartTzid: isAllDay ? undefined : dtstartTzid, // No timezone for all-day events
+          dtendTzid: isAllDay ? undefined : dtendTzid,
         };
 
         if (icalEvent.uid) {
@@ -687,6 +815,7 @@ export async function fetchICalCalendar(
         name: config.name,
         url: config.url,
         events: cachedEvents,
+        color: config.color,
         changed: false,
         cached: fetchResult.cached,
       };
@@ -710,6 +839,7 @@ export async function fetchICalCalendar(
       name: config.name,
       url: config.url,
       events,
+      color: config.color,
       changed: true,
       cached: false,
     };

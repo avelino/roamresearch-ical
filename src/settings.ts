@@ -12,7 +12,14 @@ import {
   DEFAULT_SYNC_DAYS_PAST,
   DEFAULT_SYNC_DAYS_FUTURE,
   DEFAULT_TITLE_PREFIX,
+  DEFAULT_SHOW_TIME,
+  DEFAULT_TIME_FORMAT,
+  DEFAULT_RECURRING_INDICATOR,
+  DEFAULT_SHOW_TIMEZONE,
+  DEFAULT_ENABLE_SMART_SYNC,
+  DEFAULT_ENABLE_ERROR_REPORTS,
 } from "./constants";
+import type { TimeFormat } from "./ical";
 import { logWarn } from "./logger";
 import type { ExtensionAPI } from "./main";
 import type { CalendarConfig } from "./ical";
@@ -60,6 +67,17 @@ export type SettingsSnapshot = {
   syncDaysPast: number;
   syncDaysFuture: number;
   titlePrefix: string;
+  // Time display settings
+  showTime: boolean;
+  timeFormat: TimeFormat;
+  // Recurring event indicator
+  recurringIndicator: string;
+  // Timezone settings
+  showTimezone: boolean;
+  // Smart sync settings
+  enableSmartSync: boolean;
+  // Error reporting settings
+  enableErrorReports: boolean;
 };
 
 export type SettingsHandle =
@@ -149,6 +167,23 @@ function readSettingsFromPanel(
   );
   const titlePrefix = getString(allSettings, SETTINGS_KEYS.titlePrefix) ?? DEFAULT_TITLE_PREFIX;
 
+  // Time display settings
+  const showTime = getBoolean(allSettings, SETTINGS_KEYS.showTime, DEFAULT_SHOW_TIME);
+  const timeFormatRaw = getString(allSettings, SETTINGS_KEYS.timeFormat) ?? DEFAULT_TIME_FORMAT;
+  const timeFormat: TimeFormat = timeFormatRaw === "12h" ? "12h" : "24h";
+
+  // Recurring event indicator
+  const recurringIndicator = getString(allSettings, SETTINGS_KEYS.recurringIndicator) ?? DEFAULT_RECURRING_INDICATOR;
+
+  // Timezone settings
+  const showTimezone = getBoolean(allSettings, SETTINGS_KEYS.showTimezone, DEFAULT_SHOW_TIMEZONE);
+
+  // Smart sync settings
+  const enableSmartSync = getBoolean(allSettings, SETTINGS_KEYS.enableSmartSync, DEFAULT_ENABLE_SMART_SYNC);
+
+  // Error reporting settings
+  const enableErrorReports = getBoolean(allSettings, SETTINGS_KEYS.enableErrorReports, DEFAULT_ENABLE_ERROR_REPORTS);
+
   return {
     pagePrefix,
     intervalMs: intervalMinutes * 60 * 1000,
@@ -161,6 +196,12 @@ function readSettingsFromPanel(
     syncDaysPast,
     syncDaysFuture,
     titlePrefix,
+    showTime,
+    timeFormat,
+    recurringIndicator,
+    showTimezone,
+    enableSmartSync,
+    enableErrorReports,
   };
 }
 
@@ -249,6 +290,31 @@ function readSettingsFromPage(pageUid: string): SettingsSnapshot {
     defaultValue: DEFAULT_TITLE_PREFIX,
   });
 
+  // Time display settings (use defaults for page-based config)
+  const showTime = hasFlag(tree, "Show Event Time") || DEFAULT_SHOW_TIME;
+  const timeFormatRaw = getSettingValueFromTree({
+    tree,
+    key: "Time Format",
+    defaultValue: DEFAULT_TIME_FORMAT,
+  });
+  const timeFormat: TimeFormat = timeFormatRaw === "12h" ? "12h" : "24h";
+
+  // Recurring event indicator (use defaults for page-based config)
+  const recurringIndicator = getSettingValueFromTree({
+    tree,
+    key: "Recurring Indicator",
+    defaultValue: DEFAULT_RECURRING_INDICATOR,
+  });
+
+  // Timezone settings (use defaults for page-based config)
+  const showTimezone = hasFlag(tree, "Show Timezone");
+
+  // Smart sync settings (use defaults for page-based config)
+  const enableSmartSync = hasFlag(tree, "Enable Smart Sync") || DEFAULT_ENABLE_SMART_SYNC;
+
+  // Error reporting settings (use defaults for page-based config)
+  const enableErrorReports = hasFlag(tree, "Enable Error Reports");
+
   return {
     pagePrefix,
     intervalMs,
@@ -261,6 +327,12 @@ function readSettingsFromPage(pageUid: string): SettingsSnapshot {
     syncDaysPast,
     syncDaysFuture,
     titlePrefix,
+    showTime,
+    timeFormat,
+    recurringIndicator,
+    showTimezone,
+    enableSmartSync,
+    enableErrorReports,
   };
 }
 
@@ -328,8 +400,32 @@ export interface ParseCalendarsResult {
 }
 
 /**
+ * Validates a color string (hex code or CSS color name).
+ * @param color Color string to validate.
+ * @returns true if valid color format.
+ */
+export function isValidColor(color: string): boolean {
+  if (!color) return false;
+  const trimmed = color.trim().toLowerCase();
+
+  // Hex color: #RGB, #RRGGBB, or #RRGGBBAA
+  if (/^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(trimmed)) {
+    return true;
+  }
+
+  // CSS named colors (common subset)
+  const namedColors = new Set([
+    "red", "blue", "green", "yellow", "orange", "purple", "pink",
+    "cyan", "magenta", "brown", "black", "white", "gray", "grey",
+    "teal", "navy", "maroon", "olive", "lime", "aqua", "fuchsia",
+    "silver", "coral", "salmon", "tomato", "gold", "indigo", "violet",
+  ]);
+  return namedColors.has(trimmed);
+}
+
+/**
  * Parses calendar configuration from a multi-line string.
- * Format: name|url (one per line)
+ * Format: name|url or name|url|color (one per line)
  */
 export function parseCalendarsConfig(raw: string): ParseCalendarsResult {
   if (!raw) return { calendars: [], errors: [] };
@@ -347,15 +443,16 @@ export function parseCalendarsConfig(raw: string): ParseCalendarsResult {
       continue;
     }
 
-    const pipeIndex = trimmed.indexOf("|");
-    if (pipeIndex === -1) {
+    const parts = trimmed.split("|").map(p => p.trim());
+
+    if (parts.length === 1) {
       // Assume it's just a URL, use URL hostname as name
-      if (isValidUrl(trimmed)) {
+      if (isValidUrl(parts[0])) {
         try {
-          const url = new URL(trimmed);
+          const url = new URL(parts[0]);
           calendars.push({
             name: url.hostname,
-            url: trimmed,
+            url: parts[0],
           });
         } catch {
           errors.push({ line: trimmed, error: "Invalid URL format" });
@@ -368,8 +465,7 @@ export function parseCalendarsConfig(raw: string): ParseCalendarsResult {
       continue;
     }
 
-    const name = trimmed.slice(0, pipeIndex).trim();
-    const url = trimmed.slice(pipeIndex + 1).trim();
+    const [name, url, color] = parts;
 
     if (!name) {
       errors.push({ line: trimmed, error: "Calendar name is empty" });
@@ -389,7 +485,18 @@ export function parseCalendarsConfig(raw: string): ParseCalendarsResult {
       continue;
     }
 
-    calendars.push({ name, url });
+    // Validate color if provided
+    const calendarConfig: CalendarConfig = { name, url };
+    if (color) {
+      if (isValidColor(color)) {
+        calendarConfig.color = color;
+      } else {
+        // Log warning but don't fail - just skip the color
+        logWarn("Invalid color format (skipped)", { color, calendar: name });
+      }
+    }
+
+    calendars.push(calendarConfig);
   }
 
   return { calendars, errors };

@@ -248,6 +248,10 @@ async function syncCalendars(trigger: "manual" | "auto" | "force") {
         excludePatterns: settings.excludePatterns,
         titlePrefix: settings.titlePrefix,
         attendeeAliases: settings.attendeeAliases,
+        showTime: settings.showTime,
+        timeFormat: settings.timeFormat,
+        recurringIndicator: settings.recurringIndicator,
+        showTimezone: settings.showTimezone,
       }
     );
 

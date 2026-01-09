@@ -12,6 +12,12 @@ import {
   DEFAULT_SYNC_DAYS_PAST,
   DEFAULT_SYNC_DAYS_FUTURE,
   DEFAULT_TITLE_PREFIX,
+  DEFAULT_SHOW_TIME,
+  DEFAULT_TIME_FORMAT,
+  DEFAULT_RECURRING_INDICATOR,
+  DEFAULT_SHOW_TIMEZONE,
+  DEFAULT_ENABLE_SMART_SYNC,
+  DEFAULT_ENABLE_ERROR_REPORTS,
 } from "./constants";
 import { validateCalendarUrl, type CalendarValidationResult } from "./url-validation";
 
@@ -33,6 +39,17 @@ export const SETTINGS_KEYS = {
   syncDaysPast: "sync_days_past",
   syncDaysFuture: "sync_days_future",
   titlePrefix: "title_prefix",
+  // Time display settings
+  showTime: "show_time",
+  timeFormat: "time_format",
+  // Recurring event indicator
+  recurringIndicator: "recurring_indicator",
+  // Timezone settings
+  showTimezone: "show_timezone",
+  // Smart sync settings
+  enableSmartSync: "enable_smart_sync",
+  // Error reporting settings
+  enableErrorReports: "enable_error_reports",
 } as const;
 
 /**
@@ -50,6 +67,17 @@ export const DEFAULT_SETTINGS: Record<string, unknown> = {
   [SETTINGS_KEYS.syncDaysPast]: DEFAULT_SYNC_DAYS_PAST,
   [SETTINGS_KEYS.syncDaysFuture]: DEFAULT_SYNC_DAYS_FUTURE,
   [SETTINGS_KEYS.titlePrefix]: DEFAULT_TITLE_PREFIX,
+  // Time display settings
+  [SETTINGS_KEYS.showTime]: DEFAULT_SHOW_TIME,
+  [SETTINGS_KEYS.timeFormat]: DEFAULT_TIME_FORMAT,
+  // Recurring event indicator
+  [SETTINGS_KEYS.recurringIndicator]: DEFAULT_RECURRING_INDICATOR,
+  // Timezone settings
+  [SETTINGS_KEYS.showTimezone]: DEFAULT_SHOW_TIMEZONE,
+  // Smart sync settings
+  [SETTINGS_KEYS.enableSmartSync]: DEFAULT_ENABLE_SMART_SYNC,
+  // Error reporting settings
+  [SETTINGS_KEYS.enableErrorReports]: DEFAULT_ENABLE_ERROR_REPORTS,
 };
 
 // Helper functions
@@ -397,6 +425,34 @@ export function registerSettingsPanel(extensionAPI: ExtensionAPI): void {
       );
     };
 
+  /**
+   * Select component for dropdown selections.
+   */
+  const Select = (key: string, options: { value: string; label: string }[]) =>
+    function SelectComponent() {
+      const getInitial = () =>
+        getString(extensionAPI.settings.getAll() ?? {}, key) ?? String(DEFAULT_SETTINGS[key] ?? options[0]?.value ?? "");
+      const [value, setValue] = useState(getInitial());
+      useEffect(() => {
+        setValue(getInitial());
+      }, []);
+      return React.createElement(
+        "select",
+        {
+          value,
+          style: { padding: "0.25rem 0.5rem", minWidth: "150px" },
+          onChange: (event: { target: { value: string } }) => {
+            const next = event.target.value;
+            setValue(next);
+            void extensionAPI.settings.set(key, next);
+          },
+        },
+        options.map((opt) =>
+          React.createElement("option", { key: opt.value, value: opt.value }, opt.label)
+        )
+      );
+    };
+
   extensionAPI.settings.panel!.create({
     tabTitle: "iCal Sync",
     settings: [
@@ -507,6 +563,77 @@ export function registerSettingsPanel(extensionAPI: ExtensionAPI): void {
         action: {
           type: "reactComponent",
           component: TextInput(SETTINGS_KEYS.titlePrefix, "text", DEFAULT_TITLE_PREFIX),
+        },
+      },
+      // Time display settings
+      {
+        id: SETTINGS_KEYS.showTime,
+        name: "Show Event Time",
+        description:
+          "Display start and end times for timed events. All-day events never show time.",
+        action: {
+          type: "reactComponent",
+          component: Toggle(SETTINGS_KEYS.showTime),
+        },
+      },
+      {
+        id: SETTINGS_KEYS.timeFormat,
+        name: "Time Format",
+        description:
+          "Choose between 24-hour (14:30) or 12-hour (2:30 PM) format.",
+        action: {
+          type: "reactComponent",
+          component: Select(SETTINGS_KEYS.timeFormat, [
+            { value: "24h", label: "24-hour (14:30)" },
+            { value: "12h", label: "12-hour (2:30 PM)" },
+          ]),
+        },
+      },
+      {
+        id: SETTINGS_KEYS.showTimezone,
+        name: "Show Timezone",
+        description:
+          "Display timezone abbreviation with time (e.g., 10:00 EST). Only applies to timed events.",
+        action: {
+          type: "reactComponent",
+          component: Toggle(SETTINGS_KEYS.showTimezone),
+        },
+      },
+      // Recurring event settings
+      {
+        id: SETTINGS_KEYS.recurringIndicator,
+        name: "Recurring Event Indicator",
+        description:
+          "How to indicate recurring events. Select 'None' to hide the indicator.",
+        action: {
+          type: "reactComponent",
+          component: Select(SETTINGS_KEYS.recurringIndicator, [
+            { value: "🔄", label: "Emoji (🔄)" },
+            { value: "#recurring", label: "Tag (#recurring)" },
+            { value: "", label: "None (hidden)" },
+          ]),
+        },
+      },
+      // Smart sync settings
+      {
+        id: SETTINGS_KEYS.enableSmartSync,
+        name: "Enable Smart Sync",
+        description:
+          "Skip unchanged events during sync. Improves performance for large calendars by only updating events that have changed.",
+        action: {
+          type: "reactComponent",
+          component: Toggle(SETTINGS_KEYS.enableSmartSync),
+        },
+      },
+      // Error reporting settings
+      {
+        id: SETTINGS_KEYS.enableErrorReports,
+        name: "Enable Error Reports",
+        description:
+          "Create detailed error report pages when calendar sync fails. Reports are saved to ical-sync-errors/<date>.",
+        action: {
+          type: "reactComponent",
+          component: Toggle(SETTINGS_KEYS.enableErrorReports),
         },
       },
     ],

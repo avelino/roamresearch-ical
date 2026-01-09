@@ -21,15 +21,24 @@ import {
   ICAL_MEETING_URL_PROPERTY,
   ICAL_ATTENDEES_PROPERTY,
   ICAL_END_PROPERTY,
+  ICAL_TIMEZONE_PROPERTY,
+  ICAL_COLOR_PROPERTY,
   DEFAULT_BATCH_SIZE,
   DEFAULT_BATCH_DELAY_MS,
   DEFAULT_TITLE_PREFIX,
+  DEFAULT_SHOW_TIME,
+  DEFAULT_TIME_FORMAT,
+  DEFAULT_RECURRING_INDICATOR,
+  DEFAULT_SHOW_TIMEZONE,
 } from "./constants";
 
 import {
   type ICalEvent,
   type ICalCalendar,
+  type TimeFormat,
   formatRoamDate,
+  formatTime,
+  formatTimeWithTimezone,
   safeText,
   sanitizeEventId,
   sortEventsByDateDescending,
@@ -72,6 +81,13 @@ export type BatchConfig = {
   excludePatterns: RegExp[];
   titlePrefix: string;
   attendeeAliases: Map<string, string>;
+  // Time display settings
+  showTime: boolean;
+  timeFormat: TimeFormat;
+  // Recurring event indicator
+  recurringIndicator: string;
+  // Timezone settings
+  showTimezone: boolean;
 };
 
 /**
@@ -164,32 +180,36 @@ export async function writeBlocks(
     excludePatterns: batchConfig?.excludePatterns ?? [],
     titlePrefix: batchConfig?.titlePrefix ?? DEFAULT_TITLE_PREFIX,
     attendeeAliases: batchConfig?.attendeeAliases ?? new Map(),
+    showTime: batchConfig?.showTime ?? DEFAULT_SHOW_TIME,
+    timeFormat: batchConfig?.timeFormat ?? DEFAULT_TIME_FORMAT,
+    recurringIndicator: batchConfig?.recurringIndicator ?? DEFAULT_RECURRING_INDICATOR,
+    showTimezone: batchConfig?.showTimezone ?? DEFAULT_SHOW_TIMEZONE,
   };
 
   // Collect all events from all calendars
-  const allEvents: { event: ICalEvent; calendarName: string }[] = [];
+  const allEvents: { event: ICalEvent; calendarName: string; calendarColor?: string }[] = [];
   for (const calendar of calendars) {
     // Filter out excluded events before processing (async to yield during filtering)
     const filteredEvents = await filterExcludedEvents(calendar.events, config.excludePatterns);
     for (const event of filteredEvents) {
-      allEvents.push({ event, calendarName: calendar.name });
+      allEvents.push({ event, calendarName: calendar.name, calendarColor: calendar.color });
     }
   }
 
   // Sort events by date (most recent first)
   const sortedEvents = sortEventsByDateDescending(allEvents.map((e) => e.event));
 
-  // Create a map to find calendar name by event UID
-  const eventCalendarMap = new Map<string, string>();
-  for (const { event, calendarName } of allEvents) {
-    eventCalendarMap.set(event.uid, calendarName);
+  // Create maps to find calendar info by event UID
+  const eventCalendarMap = new Map<string, { name: string; color?: string }>();
+  for (const { event, calendarName, calendarColor } of allEvents) {
+    eventCalendarMap.set(event.uid, { name: calendarName, color: calendarColor });
   }
 
   // Build events with blocks in sorted order
   const sortedEventsWithBlocks: EventWithBlock[] = sortedEvents.map((event) => {
-    const calendarName = eventCalendarMap.get(event.uid) ?? "Unknown";
-    const block = buildEventBlock(event, calendarName, config.titlePrefix, config.attendeeAliases);
-    return { event, calendarName, block };
+    const calendarInfo = eventCalendarMap.get(event.uid) ?? { name: "Unknown" };
+    const block = buildEventBlock(event, calendarInfo.name, config, calendarInfo.color);
+    return { event, calendarName: calendarInfo.name, block };
   });
 
   const totalEvents = sortedEventsWithBlocks.length;
@@ -363,29 +383,102 @@ function buildAttendeeReferences(
 }
 
 /**
+ * Builds the time range string for an event.
+ * Format: "10:00-11:30" or "10:00 AM-11:30 AM" depending on format.
+ * Returns empty string if no start time or if all-day event.
+ */
+function buildTimeRangeString(
+  event: ICalEvent,
+  config: BatchConfig
+): string {
+  if (!config.showTime || event.isAllDay || !event.dtstart) {
+    return "";
+  }
+
+  const startTime = config.showTimezone && event.dtstartTzid
+    ? formatTimeWithTimezone(event.dtstart, config.timeFormat, event.dtstartTzid)
+    : formatTime(event.dtstart, config.timeFormat);
+
+  if (!event.dtend) {
+    return startTime;
+  }
+
+  // If same day, show end time without timezone (to avoid redundancy)
+  const startDate = formatRoamDate(event.dtstart);
+  const endDate = formatRoamDate(event.dtend);
+
+  if (startDate === endDate) {
+    const endTime = formatTime(event.dtend, config.timeFormat);
+    return `${startTime}-${endTime}`;
+  }
+
+  return startTime;
+}
+
+/**
+ * Sanitizes a hex color code for use as a Roam tag.
+ * Removes the # prefix to create a valid tag name.
+ *
+ * @param color Hex color code (e.g., "#4285f4").
+ * @returns Sanitized tag name (e.g., "color-4285f4").
+ */
+function sanitizeColorTag(color: string): string {
+  // Remove # prefix and create color tag
+  const cleanColor = color.replace(/^#/, "").toLowerCase();
+  return `color-${cleanColor}`;
+}
+
+/**
  * Builds the block content for an event.
- * Format: [prefix] [[Date]] Event Title #calendarName
+ * Format: [prefix] [[Date]] [time] Event Title [recurring] #calendarName [#color-xxx]
  *
  * @param event iCal event to format.
  * @param calendarName Calendar name to use as tag.
- * @param titlePrefix Optional prefix to prepend to the title.
- * @param aliases Map of attendee aliases (Name/Email -> Page).
+ * @param config Batch configuration including time/timezone/recurring settings.
+ * @param calendarColor Optional color for the calendar (hex code or color name).
  */
 function buildEventBlock(
   event: ICalEvent,
   calendarName: string,
-  titlePrefix: string,
-  aliases?: Map<string, string>
+  config: BatchConfig,
+  calendarColor?: string
 ): BlockPayload {
   const dateText = event.dtstart ? formatRoamDate(event.dtstart) : "No date";
   const title = safeText(event.summary) || "Untitled event";
   const calendarTag = sanitizeTagName(calendarName);
+  const timeRange = buildTimeRangeString(event, config);
+  const recurringIndicator = event.isRecurring && config.recurringIndicator
+    ? ` ${config.recurringIndicator}`
+    : "";
 
-  // Build main text with optional prefix
-  let mainText = `[[${dateText}]] ${title} #${calendarTag}`;
-  if (titlePrefix && titlePrefix.trim()) {
-    mainText = `${titlePrefix.trim()} ${mainText}`;
+  // Build main text: [prefix] [[Date]] [time] Title [recurring] #tag
+  const parts: string[] = [];
+
+  // Add title prefix if present
+  if (config.titlePrefix && config.titlePrefix.trim()) {
+    parts.push(config.titlePrefix.trim());
   }
+
+  // Add date
+  parts.push(`[[${dateText}]]`);
+
+  // Add time range if present
+  if (timeRange) {
+    parts.push(timeRange);
+  }
+
+  // Add title with recurring indicator and calendar tag
+  let titleWithTags = `${title}${recurringIndicator} #${calendarTag}`;
+
+  // Add color tag if calendar has a color
+  if (calendarColor) {
+    const colorTag = sanitizeColorTag(calendarColor);
+    titleWithTags += ` #${colorTag}`;
+  }
+
+  parts.push(titleWithTags);
+
+  const mainText = parts.join(" ");
   const children: BlockPayload[] = [];
 
   // Always add ical-id for identification
@@ -412,7 +505,7 @@ function buildEventBlock(
 
   // Add attendees using the dedicated helper function
   if (event.attendees && event.attendees.length > 0) {
-    const attendeeLinks = buildAttendeeReferences(event.attendees, aliases);
+    const attendeeLinks = buildAttendeeReferences(event.attendees, config.attendeeAliases);
     if (attendeeLinks.length > 0) {
       children.push(createPropertyBlock(ICAL_ATTENDEES_PROPERTY, attendeeLinks.join(", ")));
     }
@@ -423,12 +516,22 @@ function buildEventBlock(
     children.push(createPropertyBlock(ICAL_URL_PROPERTY, `[link](${event.url})`));
   }
 
-  // Add end time if present and different from start
+  // Add end date if present and different from start
   if (event.dtend) {
     const endText = formatRoamDate(event.dtend);
     if (endText !== dateText) {
       children.push(createPropertyBlock(ICAL_END_PROPERTY, `[[${endText}]]`));
     }
+  }
+
+  // Add timezone if enabled and available
+  if (config.showTimezone && event.dtstartTzid) {
+    children.push(createPropertyBlock(ICAL_TIMEZONE_PROPERTY, event.dtstartTzid));
+  }
+
+  // Add calendar color if defined
+  if (calendarColor) {
+    children.push(createPropertyBlock(ICAL_COLOR_PROPERTY, calendarColor));
   }
 
   return { text: mainText, children };
