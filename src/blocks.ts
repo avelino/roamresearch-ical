@@ -3,14 +3,11 @@ import {
   getPageUidByPageTitle,
   getPageTitlesStartingWithPrefix,
   createPage,
-  createBlock,
-  updateBlock,
+  createBlock as roamCreateBlock,
+  updateBlock as roamUpdateBlock,
   deleteBlock,
   delay,
-  maybeYield,
-  MUTATION_DELAY_MS,
   type RoamBasicNode,
-  type InputTextNode,
 } from "./settings";
 
 import {
@@ -47,6 +44,13 @@ import {
 
 import { logDebug, logInfo } from "./logger";
 
+import {
+  BlockReconciler,
+  createRoamApiAdapter,
+  type BlockPayload,
+  type RoamNode,
+} from "roam-block-reconciler";
+
 /**
  * Session cache for page UIDs created during this sync.
  * This avoids race conditions where getPageUidByPageTitle
@@ -61,10 +65,8 @@ export function clearPageCache(): void {
   pageUidCache.clear();
 }
 
-type BlockPayload = {
-  text: string;
-  children: BlockPayload[];
-};
+// Fixed ID for all iCal blocks (only one per page since each page is per event)
+const ICAL_BLOCK_ID = "ical-event";
 
 type EventWithBlock = {
   event: ICalEvent;
@@ -96,10 +98,15 @@ export type BatchConfig = {
 export type BatchProgressCallback = (processed: number, total: number) => void;
 
 /**
- * Creates a property block with the standard format `key:: value`.
+ * Creates a Roam API adapter for the reconciler.
  */
-function createPropertyBlock(key: string, value: string): BlockPayload {
-  return { text: `${key}:: ${value}`, children: [] };
+function createICalRoamAdapter() {
+  return createRoamApiAdapter({
+    getBasicTreeByParentUid: (uid: string) => getBasicTreeByParentUid(uid) as RoamNode[],
+    createBlock: roamCreateBlock,
+    updateBlock: roamUpdateBlock,
+    deleteBlock,
+  });
 }
 
 /**
@@ -108,20 +115,6 @@ function createPropertyBlock(key: string, value: string): BlockPayload {
 function extractICalId(content: string): string | undefined {
   const match = content.match(new RegExp(`^${ICAL_ID_PROPERTY}::\\s*(.+)$`, "mi"));
   return match ? match[1].trim() : undefined;
-}
-
-/**
- * Extracts ical-id from a node, checking both main text and children.
- */
-function extractICalIdFromNode(node: RoamBasicNode): string | undefined {
-  let id = extractICalId(node.text ?? "");
-  if (id) return id;
-
-  for (const child of node.children ?? []) {
-    id = extractICalId(child.text ?? "");
-    if (id) return id;
-  }
-  return undefined;
 }
 
 /**
@@ -136,6 +129,77 @@ function extractICalIdFromBlock(block: BlockPayload): string | undefined {
     if (id) return id;
   }
   return undefined;
+}
+
+/**
+ * Checks if the text is an iCal header block (contains date reference and calendar tag).
+ */
+function isICalHeaderBlock(text: string): boolean {
+  // iCal blocks contain [[Date]] format and a calendar tag
+  return /\[\[[^\]]+\]\]/.test(text);
+}
+
+/**
+ * Extracts iCal identifier from a RoamNode.
+ * Supports both new format (ical-id:: property) and legacy format (header with date).
+ * Returns a fixed ID since each page has only one iCal block.
+ */
+function extractICalIdFromNode(node: RoamNode): string | undefined {
+  // Check for ical-id property in children (new format)
+  for (const child of node.children ?? []) {
+    const id = extractICalId(child.text ?? "");
+    if (id) return ICAL_BLOCK_ID;
+  }
+
+  // Check for iCal header (legacy and new format)
+  if (isICalHeaderBlock(node.text ?? "")) {
+    return ICAL_BLOCK_ID;
+  }
+
+  return undefined;
+}
+
+/**
+ * Extracts section key from a block (e.g., property keys).
+ * Used by children reconciler to match sections.
+ */
+function extractSectionKey(text: string): string | undefined {
+  // Check for property lines (key:: value format)
+  const match = text.match(/^([\w-]+)::/);
+  return match ? match[1] : undefined;
+}
+
+/**
+ * Creates a BlockReconciler configured for iCal events.
+ * Uses a fixed identifier since each page has only one iCal event block.
+ */
+function createICalReconciler() {
+  const roamApi = createICalRoamAdapter();
+
+  return new BlockReconciler<BlockPayload>(
+    {
+      // All iCal blocks use the same ID since there's only one per page
+      extractId: (block) => {
+        // Verify it's an iCal block by checking for the header pattern or property
+        if (!isICalHeaderBlock(block.text ?? "") && !extractICalIdFromBlock(block)) {
+          throw new Error(`Block is not an iCal block: ${block.text?.substring(0, 50)}`);
+        }
+        return ICAL_BLOCK_ID;
+      },
+      buildBlock: (block) => block,
+      extractIdFromBlock: (node: RoamNode) => extractICalIdFromNode(node),
+    },
+    roamApi
+  ).withChildrenReconciler({
+    extractKey: extractSectionKey,
+  });
+}
+
+/**
+ * Creates a property block with the standard format `key:: value`.
+ */
+function createPropertyBlock(key: string, value: string): BlockPayload {
+  return { text: `${key}:: ${value}`, children: [] };
 }
 
 /**
@@ -222,6 +286,8 @@ export async function writeBlocks(
 
   // Process events in batches
   let processedCount = 0;
+  const reconciler = createICalReconciler();
+
   for (let i = 0; i < sortedEventsWithBlocks.length; i += config.batchSize) {
     const batch = sortedEventsWithBlocks.slice(i, i + config.batchSize);
 
@@ -235,10 +301,19 @@ export async function writeBlocks(
       batchByPage.get(pageName)!.push(ewb);
     }
 
-    // Write batch events to their pages
+    // Write batch events to their pages using reconciler
     for (const [pageName, eventsWithBlocks] of batchByPage.entries()) {
+      const pageUid = await ensurePage(pageName);
       const blocks = eventsWithBlocks.map((e) => e.block);
-      await writeBlocksToPage(pageName, blocks);
+
+      // Reconcile using roam-block-reconciler
+      const stats = await reconciler.reconcile(pageUid, blocks);
+
+      logDebug("page_reconciled", {
+        pageName,
+        pageUid,
+        ...stats,
+      });
     }
 
     processedCount += batch.length;
@@ -537,69 +612,6 @@ function buildEventBlock(
   return { text: mainText, children };
 }
 
-async function writeBlocksToPage(pageName: string, blocks: BlockPayload[]): Promise<void> {
-  const pageUid = await ensurePage(pageName);
-  const existingTree = getBasicTreeByParentUid(pageUid);
-  const blockMap = buildBlockMap(existingTree);
-
-  logDebug("write_blocks_to_page", {
-    pageName,
-    pageUid,
-    existingBlocksCount: existingTree.length,
-    newBlocksCount: blocks.length,
-  });
-
-  const seenIds = new Set<string>();
-  let blockCount = 0;
-
-  for (const block of blocks) {
-    const icalId = extractICalIdFromBlock(block);
-    if (!icalId) {
-      continue;
-    }
-
-    // Extract date from block text for recurring event support
-    // Block format: "[[Date]] Event Title #tag" or "#prefix [[Date]] Event Title #tag"
-    const dateMatch = block.text.match(/\[\[([^\]]+)\]\]/);
-    const eventDate = dateMatch ? dateMatch[1] : "";
-
-    // Create unique key combining UID and date
-    // This allows recurring events (same UID, different dates) to be stored separately
-    const uniqueKey = `${icalId}_${eventDate}`;
-
-    // Skip if we already processed this ical-id + date combination in this batch
-    if (seenIds.has(uniqueKey)) {
-      logDebug("skip_duplicate_event", { icalId, eventDate, pageName });
-      continue;
-    }
-    seenIds.add(uniqueKey);
-
-    const existing = blockMap.get(icalId);
-    if (existing) {
-      // Update main block text if changed
-      if (existing.text !== block.text) {
-        logDebug("update_existing_block", { icalId, uid: existing.uid });
-        await updateBlock({ uid: existing.uid, text: block.text });
-        await delay(MUTATION_DELAY_MS);
-      }
-      // Sync children (properties)
-      await syncChildren(existing.uid, block.children);
-    } else {
-      logDebug("create_new_block", { icalId, pageName });
-      await createBlock({
-        parentUid: pageUid,
-        order: "last",
-        node: toInputNode(block),
-      });
-    }
-
-    blockCount++;
-    await maybeYield(blockCount);
-  }
-
-  await removeObsoleteBlocks(blockMap, seenIds);
-}
-
 /**
  * Attempts to find page UID with retries to handle eventual consistency.
  */
@@ -607,6 +619,7 @@ async function findPageUidWithRetry(
   pageName: string,
   maxRetries: number = 3
 ): Promise<string | undefined> {
+  const MUTATION_DELAY_MS = 100;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     const uid = getPageUidByPageTitle(pageName);
     if (uid) {
@@ -666,74 +679,6 @@ async function ensurePage(pageName: string): Promise<string> {
   }
 }
 
-async function removeObsoleteBlocks(
-  blockMap: Map<string, RoamBasicNode>,
-  seenIds: Set<string>
-): Promise<void> {
-  let removeCount = 0;
-  for (const [icalId, node] of blockMap.entries()) {
-    if (seenIds.has(icalId)) {
-      continue;
-    }
-    await deleteBlock(node.uid);
-    await delay(MUTATION_DELAY_MS);
-
-    removeCount++;
-    await maybeYield(removeCount);
-  }
-}
-
-/**
- * Synchronizes child blocks (properties) for an existing event block.
- */
-async function syncChildren(parentUid: string, newChildren: BlockPayload[]): Promise<void> {
-  const existingChildren = getBasicTreeByParentUid(parentUid);
-
-  // Build a map of existing property blocks by their property key
-  const existingPropsMap = new Map<string, RoamBasicNode>();
-  for (const child of existingChildren) {
-    const propKey = extractPropertyKey(child.text);
-    if (propKey) {
-      existingPropsMap.set(propKey, child);
-    }
-  }
-
-  let childCount = 0;
-  for (const newChild of newChildren) {
-    const propKey = extractPropertyKey(newChild.text);
-
-    if (propKey) {
-      const existing = existingPropsMap.get(propKey);
-      if (existing) {
-        // Update if changed
-        if (existing.text !== newChild.text) {
-          await updateBlock({ uid: existing.uid, text: newChild.text });
-          await delay(MUTATION_DELAY_MS);
-        }
-        existingPropsMap.delete(propKey);
-      } else {
-        // Create new property
-        await createBlock({
-          parentUid,
-          order: "last",
-          node: toInputNode(newChild),
-        });
-      }
-    }
-
-    childCount++;
-    await maybeYield(childCount);
-  }
-}
-
-/**
- * Extracts the property key from a Roam property line.
- */
-function extractPropertyKey(text: string): string | undefined {
-  const match = text.match(/^([\w-]+)::/);
-  return match ? match[1] : undefined;
-}
-
 async function cleanupObsoletePages(
   pagePrefix: string,
   currentEventsByPage: Map<string, EventWithBlock[]>
@@ -747,7 +692,7 @@ async function cleanupObsoletePages(
 
   const prefix = `${pagePrefix}/`;
   const pageTitles = getPageTitlesStartingWithPrefix(prefix);
-  let cleanupCount = 0;
+  const MUTATION_DELAY_MS = 100;
 
   for (const pageTitle of pageTitles) {
     if (currentEventsByPage.has(pageTitle)) {
@@ -760,40 +705,28 @@ async function cleanupObsoletePages(
     }
 
     const tree = getBasicTreeByParentUid(pageUid);
-    const blockMap = buildBlockMap(tree);
 
-    for (const [icalId, node] of blockMap.entries()) {
-      if (currentEventIds.has(icalId)) {
-        continue;
+    for (const node of tree) {
+      // Check if this block has an ical-id that's no longer in our current events
+      const icalId = extractICalIdFromNodeLegacy(node);
+      if (icalId && !currentEventIds.has(icalId)) {
+        await deleteBlock(node.uid);
+        await delay(MUTATION_DELAY_MS);
       }
-      await deleteBlock(node.uid);
-      await delay(MUTATION_DELAY_MS);
-
-      cleanupCount++;
-      await maybeYield(cleanupCount);
     }
   }
 }
 
 /**
- * Builds a map of existing blocks indexed by ical-id.
+ * Extracts ical-id from a RoamBasicNode (legacy format for cleanup).
  */
-function buildBlockMap(tree: RoamBasicNode[]): Map<string, RoamBasicNode> {
-  const map = new Map<string, RoamBasicNode>();
+function extractICalIdFromNodeLegacy(node: RoamBasicNode): string | undefined {
+  let id = extractICalId(node.text ?? "");
+  if (id) return id;
 
-  for (const node of tree) {
-    const id = extractICalIdFromNode(node);
-    if (id) {
-      map.set(id, node);
-      logDebug("build_block_map_found", { id, uid: node.uid });
-    }
+  for (const child of node.children ?? []) {
+    id = extractICalId(child.text ?? "");
+    if (id) return id;
   }
-  return map;
-}
-
-function toInputNode(payload: BlockPayload): InputTextNode {
-  return {
-    text: payload.text,
-    children: payload.children.map(toInputNode),
-  };
+  return undefined;
 }
